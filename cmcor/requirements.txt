@@ -1,0 +1,8 @@
+numpy
+matplotlib
+opencv-contrib-python   # For cv2. May be also only opencv-python.
+scikit-image
+scikit-learn
+scipy
+numpy-quaternion
+tqdm

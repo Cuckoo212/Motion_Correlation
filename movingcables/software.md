@@ -1,0 +1,27 @@
+#  Software Metadata
+- Title of output (not the same as relevant publication/article): MovingCables software
+- Registration number / Internal identifier: MovingCables software
+- Version: 1.0
+- Project title: Robotics and Advanced Industrial Production
+- Project registration number: CZ.02.01.01/00/22_008/0004590
+- Type of result: software
+- Date of publication: 4.6.2024
+- Authors and contributors (including affiliation, ORCID, contact of at least one contact point):
+    - Ondřej Holešovský
+        - Czech Technical University in Prague, Czech Republic, 0000-0001-9095-9669, ondrej.holesovsky@cvut.cz
+    - Radoslav Škoviera
+        - Czech Technical University in Prague, Czech Republic, 0000-0002-9764-4325, radoslav.skoviera@cvut.cz
+    - Václav Hlaváč
+        - Czech Technical University in Prague, Czech Republic, 0000-0002-8472-3147, vaclav.hlavac@cvut.cz
+- Keywords: Data sets for robotic vision, deep learning for visual perception, object detection, segmentation and categorization, cable motion, optical flow.
+- URL of storage location (DOI or other persistent identifier): https://github.com/holesond/movingcables
+- Description: MovingCables software contains MfnProb (FT) for estimating optical flow in scenes with moving cables and for densely segmenting moving cables in color images. It also contains custom image compositor software tools for creating new datasets derived from the MovingCables dataset.
+- Relevance to the project (optional): MovingCables is part of the effort to develop interactive perception system for robotic manipulators.
+- Link to technical documentation: https://github.com/holesond/movingcables
+- License (including restrictions and copyrights): MIT license
+- System requirements (e.g. OS/hardware requirements, programming language, libraries): Python 3, MXNet 1.5.1, Numpy, Matplotlib, OpenCV, and more (see requirements.txt for CPU or requirements_cuda10.txt for GPU computation). GPU computation requires one of:
+    - CUDA 10.1 which is simple to install with compatible MXNet 1.5.1 binaries available online for a compatible GPU (likely only Nvidia architectures Kepler, Maxwell, Pascal, Volta and Turing), or
+    - CUDA 11.8 which requires building MXNet 1.5.1 from source against CUDA 11.8 and CUDNN 8.9.7 and which supports more Nvidia architectures (likely Kepler, Maxwell, Pascal, Volta, Turing, Ampere, Ada Lovelace and Hopper).
+- Type of interface/API: console app
+- Links to related publications and/or datasets: https://doi.org/10.1109/LRA.2024.3416800 and https://doi.org/10.5281/zenodo.14627726
+- Naming convention of file/s and/or software: N/A

@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# ROS / colcon outputs
+build/
+install/
+log/
+
+# Local datasets and experiment outputs
+datasets/
+data/
+output/
+outputs/
+results/
+runs/
+cmcor/datasets/
+cmcor/output/
+cmcor/test_data/
+
+# Large model artifacts
+*.params
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.engine
+
+# Local captures / media / generated assets
+info_for_3Dpoint/
+*.bag
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.ply
+*.pcd
+*.npy
+*.npz
+
+# MovingCables generated/local data
+movingcables/datasets/
+movingcables/output/
+movingcables/outputs/
+movingcables/results/
+movingcables/MaskFlownet/weights/*.params
+
+# Local editor/system files
+.DS_Store
+.vscode/
+.idea/
+.codex/

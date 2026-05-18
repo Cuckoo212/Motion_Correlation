@@ -1,0 +1,26 @@
+#  Software Metadata
+- Title of output (not the same as relevant publication/article): CMCor software
+- Registration number / Internal identifier: CMCor software
+- Version: 1.0
+- Project title: Robotics and Advanced Industrial Production
+- Project registration number: CZ.02.01.01/00/22_008/0004590
+- Type of result: software
+- Date of publication: 3.6.2025
+- Authors and contributors (including affiliation, ORCID, contact of at least one contact point):
+    - Ondřej Holešovský
+        - Czech Technical University in Prague, Czech Republic, 0000-0001-9095-9669, ondrej.holesovsky@cvut.cz
+    - Radoslav Škoviera
+        - Czech Technical University in Prague, Czech Republic, 0000-0002-9764-4325, radoslav.skoviera@cvut.cz
+    - Václav Hlaváč
+        - Czech Technical University in Prague, Czech Republic, 0000-0002-8472-3147, vaclav.hlavac@cvut.cz
+- Keywords: Detection, segmentation and categorization, perception for grasping and manipulation, data
+sets for robotic vision, cable motion, optical flow.
+- URL of storage location (DOI or other persistent identifier): https://github.com/holesond/cmcor
+- Description: Manipulating tangled hoses, cables, or ropes can be challenging for both robots and humans. Humans often approach these perceptually demanding tasks by pushing or pulling tangled cables and observing the resulting motions. We follow a similar idea to aid robotic cable manipulation. CMCor software integrates visual and proprioceptive perception to segment a grasped cable by moving it even when the robot or the grasped cable sometimes perturb neighboring cables. We formulate the cable interactive segmentation problem in such a way that our methods do not require robot arm segmentation masks.
+- Relevance to the project (optional): CMCor is part of the effort to develop interactive perception system for robotic manipulators.
+- Link to technical documentation: https://github.com/holesond/cmcor
+- License (including restrictions and copyrights): MIT license
+- System requirements (e.g. OS/hardware requirements, programming language, libraries): MovingCables software, Python 3, Numpy, Matplotlib, OpenCV, scikit-image, scikit-learn, scipy, numpy-quaternion, tqdm (see requirements.txt and README.md for more details).
+- Type of interface/API: console app
+- Links to related publications and/or datasets: https://doi.org/10.1109/LRA.2025.3574960 and https://doi.org/10.5281/zenodo.15356102
+- Naming convention of file/s and/or software: N/A
