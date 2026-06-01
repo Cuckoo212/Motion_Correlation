@@ -110,6 +110,8 @@ def find_cable_pose(points, inlier_dist=0.04):
     center = geometric_median(points)
     dists = np.linalg.norm(points - center[None,:], axis=1)
     points = points[dists<inlier_dist,:]
+    if points.shape[0] < 3:
+        return None
     axis = get_principal_axis(points)
     return center, axis, points
 
@@ -135,8 +137,7 @@ def find_cable_pose_depth(depth, K, mask, inlier_dist=0.04):
     points = depth2points(depth, K, mask, u, v)
     if points.size < 30:
         return None
-    center, axis, points = find_cable_pose(points, inlier_dist)
-    return center, axis, points
+    return find_cable_pose(points, inlier_dist)
 
 
 def plot_points(points, center=None, axis=None):

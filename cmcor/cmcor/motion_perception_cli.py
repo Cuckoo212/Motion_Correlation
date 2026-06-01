@@ -288,6 +288,9 @@ def cmd_main():
     parser_view.add_argument(
         "results_folder", default=None, type=str,
         help="folder containing the motion perception results")
+    parser_view.add_argument(
+        "--save", default=None, type=str,
+        help="optional output image path for the visualization")
     args = parser.parse_args()
     if args.subparser_name == "compute":
         crop_origin = None
@@ -304,7 +307,7 @@ def cmd_main():
             scale_factor=scale_factor)
         mpm.main()
     elif args.subparser_name == "view":
-        view_segmentation(args.algorithm, args.results_folder)
+        view_segmentation(args.results_folder, args.algorithm, args.save)
     else:
         raise ValueError(
             f"Unexpected command (subparser_name): {args.subparser_name}")

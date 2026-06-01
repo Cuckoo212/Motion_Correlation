@@ -13,8 +13,8 @@ class MotionPerceptionSettings():
     motion_correlation_min_a = 0.18   # Interactivity threshold.
     motion_correlation_min_cod = 0.86 # Coefficient of determination threshold.
     motion_segmentation_vote_thr = 47 # Relative. Between 0 and 100.
-    dataset_root = "/home/flexcycle/cv_models/cmcor/datasets/CMCor"
-    output_root = "/home/flexcycle/cv_models/cmcor/output"
+    dataset_root = "/home/flexcycle/Motion_Correlaion/cmcor/datasets/CMCor"
+    output_root = "/home/flexcycle/Motion_Correlaion/cmcor/output"
     double_grasp_sequences = [
         # 2024 double grasp sets
         ["2024-10-30-161137", "2024-10-30-161441"],
