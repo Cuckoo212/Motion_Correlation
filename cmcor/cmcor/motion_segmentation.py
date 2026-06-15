@@ -64,7 +64,8 @@ def compute_segmentation_images(
                 gripper_positions[sel,:])
             flow_img = masked_flow(
                 flow_predictor, image_sample, target_image_sample,
-                use_dummy_flow, crop_origin, crop_size, scale_factor)
+                use_dummy_flow, crop_origin, crop_size, scale_factor,
+                do_filter_flow=True)
             ref_flow = deepcopy(flow_img)
             last_action = action
             last_sampled_d_gripper = None
@@ -78,7 +79,8 @@ def compute_segmentation_images(
         if flow_img is None:
             flow_img = masked_flow(
                 flow_predictor, image_sample, target_image_sample,
-                use_dummy_flow, crop_origin, crop_size, scale_factor)
+                use_dummy_flow, crop_origin, crop_size, scale_factor,
+                do_filter_flow=True)
         if segmentations is None:
             shape = flow_img.shape[0:2]
             result = initialize_segmentation_images(

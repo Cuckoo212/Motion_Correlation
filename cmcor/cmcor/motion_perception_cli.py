@@ -54,12 +54,8 @@ class MotionPerceptionMulti():
         self.focal_length = focal_length
     
     def process_sequence(
-            self, seq_folder, seq_index, add_target_sample=False):
+            self, seq_folder, seq_index, target_image_sample=None):
         self.mp.load_buffer_from_disk(seq_folder)
-        if add_target_sample:
-            self.mp.add_sample(
-                self.target_rgb_image, self.target_arm_mask,
-                self.target_ee_point, self.target_action_index)
         if self.algorithm == "correlation":
             gripper_depth = None
             focal_length = None
@@ -69,7 +65,8 @@ class MotionPerceptionMulti():
                 focal_length = self.focal_length
             t_0 = time.time()
             self.mp.compute_correlation_images(
-                gripper_depth, focal_length)
+                gripper_depth, focal_length,
+                target_image_sample=target_image_sample)
             t_1 = time.time()
             print(
                 f"    compute_correlation_images took {t_1-t_0:.4f} s. "
@@ -130,11 +127,22 @@ class MotionPerceptionMulti():
         self.process_sequence(seq_folder, seq_index)
         self.target_rgb_image = deepcopy(
             self.mp.image_buffer[-1]["rgb_image"])
+        self.target_image_sample = {
+            "rgb_image": self.target_rgb_image,
+        }
         if "arm_mask" in self.mp.image_buffer[-1]:
             self.target_arm_mask = deepcopy(
                 self.mp.image_buffer[-1]["arm_mask"])
+            self.target_image_sample["arm_mask"] = self.target_arm_mask
         else:
             self.target_arm_mask = None
+        if "foreground_mask" in self.mp.image_buffer[-1]:
+            self.target_foreground_mask = deepcopy(
+                self.mp.image_buffer[-1]["foreground_mask"])
+            self.target_image_sample["foreground_mask"] = (
+                self.target_foreground_mask)
+        else:
+            self.target_foreground_mask = None
         self.target_ee_point = deepcopy(self.mp.ee_point_buffer[-1])
         self.target_action_index = self.mp.action_buffer[-1]
         target_rgb_path = os.path.join(self.folder_out, "target_rgb.png")
@@ -142,7 +150,8 @@ class MotionPerceptionMulti():
         for seq_index, seq_folder in enumerate(self.sequence_folders[0:-1]):
             print(f"Processing {seq_folder}...")
             self.process_sequence(
-                seq_folder, seq_index, add_target_sample=True)
+                seq_folder, seq_index,
+                target_image_sample=deepcopy(self.target_image_sample))
 
 
 def draw_mask(rgb_image, mask, colormap_color, mask_opacity):
@@ -270,6 +279,16 @@ def cmd_main():
         "-s", "--scale", default=None, type=float,
         help="scale the (cropped) images by this factor before computing flow")
     parser_compute.add_argument(
+        "--save-visualization", action="store_true", default=False,
+        help=(
+            "after computing, save visualization.png and visualization-votes.png "
+            "in folder_out"))
+    parser_compute.add_argument(
+        "--visualization-path", default=None, type=str,
+        help=(
+            "after computing, save the visualization to this path. The voting "
+            "view is saved next to it with -votes before the extension."))
+    parser_compute.add_argument(
         "algorithm", default=None, type=str,
         choices=MOTION_PERCEPTION_ALGORITHMS,
         help="motion perception algorithm")
@@ -306,6 +325,13 @@ def cmd_main():
             crop_origin=crop_origin, crop_size=crop_size,
             scale_factor=scale_factor)
         mpm.main()
+        if args.visualization_path is not None:
+            view_segmentation(
+                args.folder_out, args.algorithm, args.visualization_path)
+        elif args.save_visualization:
+            visualization_path = os.path.join(
+                args.folder_out, "visualization.png")
+            view_segmentation(args.folder_out, args.algorithm, visualization_path)
     elif args.subparser_name == "view":
         view_segmentation(args.results_folder, args.algorithm, args.save)
     else:

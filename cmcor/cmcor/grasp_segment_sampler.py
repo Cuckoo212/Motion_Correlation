@@ -2,13 +2,10 @@
 Sample cable segments likely suitable for grasping.
 """
 import os
-import sys
 import time
 import warnings
 
 import numpy as np
-from PyQt5 import QtGui, QtCore, QtWidgets
-QtWidgets.QApplication(sys.argv)
 import cv2
 import matplotlib.pyplot as plt
 

@@ -216,11 +216,13 @@ def update_v_flow_pca(
 
 def compute_d_flow_pca(
         flow_metric, ref_flow, v_flow, flow_cov, thr_static, thr_moving,
-        print_timing=False):
+        analysis_mask=None, print_timing=False):
     t_0 = time.time()
     relative_flow = flow_metric - ref_flow
     d_flow = flow_image_norm(relative_flow)
     moving_mask = d_flow > thr_moving
+    if analysis_mask is not None:
+        moving_mask = np.logical_and(moving_mask, analysis_mask)
     update_flow_cov(flow_cov, relative_flow, moving_mask)
     update_v_flow_pca(v_flow, relative_flow, flow_cov, moving_mask)
     v_valid = np.isfinite(v_flow[...,0])
@@ -228,6 +230,8 @@ def compute_d_flow_pca(
     d_flow[v_valid] = sel_product[...,0] + sel_product[...,1]
     d_flow[np.logical_not(v_valid)] = 0
     d_flow[np.abs(d_flow) < thr_static] = 0
+    if analysis_mask is not None:
+        d_flow[np.logical_not(analysis_mask)] = 0
     t_1 = time.time()
     if print_timing:
         print(f"    compute_d_flow_pca took {t_1-t_0:.6f} s")
@@ -247,7 +251,7 @@ def compute_d_flow(flow_metric, ref_flow, v_flow, thr_static, thr_moving):
 
 def inflate_arm_mask(mask):
     dilation_shape = cv2.MORPH_RECT
-    dilation_size = 5
+    dilation_size = 12
     element = cv2.getStructuringElement(dilation_shape,
         (2 * dilation_size + 1, 2 * dilation_size + 1),
         (dilation_size, dilation_size))
@@ -350,7 +354,8 @@ def masked_flow(
         full_flow_img = descale_and_decrop(
             flow_img, crop_origin, crop_size, scale_factor, orig_size,
             is_flow_image=True)
-    if do_filter_flow and "arm_mask" in image_sample:
+    if (do_filter_flow and "arm_mask" in image_sample
+            and "foreground_mask" not in image_sample):
         arm_mask_ref = inflate_arm_mask(image_sample["arm_mask"])
         full_flow_img = filter_flow(full_flow_img, arm_mask_ref)
         #arm_mask = inflate_arm_mask(target_image_sample["arm_mask"])
@@ -364,7 +369,7 @@ def masked_metric_flow(
         scale_meters_per_pixel):
     flow_img = masked_flow(
         flow_predictor, image_sample, target_image_sample, use_dummy_flow,
-        crop_origin, crop_size, scale_factor)
+        crop_origin, crop_size, scale_factor, do_filter_flow=True)
     flow_metric = get_metric_flow(flow_img, scale_meters_per_pixel)
     return flow_metric
 
@@ -391,6 +396,7 @@ def d_flow_moments_task(
         queue_in, action, ref_flow, v_flow, flow_cov, moments, action2index,
         sample_point,
         thr_static_px, thr_moving_pca_px, scale_meters_per_pixel,
+        target_analysis_mask=None,
         print_timing=False):
     while True:
         sample = queue_in.get()
@@ -403,7 +409,8 @@ def d_flow_moments_task(
         d_flow = compute_d_flow_pca(
             flow_metric, ref_flow, v_flow, flow_cov,
             thr_static_px*scale_meters_per_pixel,
-            thr_moving_pca_px*scale_meters_per_pixel)
+            thr_moving_pca_px*scale_meters_per_pixel,
+            analysis_mask=target_analysis_mask)
         update_moments(
             moments[action2index[action]], d_gripper, d_flow,
             sample_point, d_manual)
@@ -433,7 +440,8 @@ def run_pipeline(
         args=[queue_flow, action, ref_flow, v_flow, flow_cov,
             moments, action2index, sample_point,
             thr_static_px, thr_moving_pca_px,
-            scale_meters_per_pixel])
+            scale_meters_per_pixel,
+            target_image_sample.get("foreground_mask")])
     thread_flow.start()
     thread_moments.start()
     thread_flow.join()
@@ -444,7 +452,8 @@ def compute_correlation_images(
         scale_meters_per_pixel, gripper_positions, action_codes, image_buffer,
         flow_predictor, sample_point=None, x_manual=None,
         min_gripper_diff=0.001, use_dummy_flow=False,
-        crop_origin=None, crop_size=None, scale_factor=None):
+        crop_origin=None, crop_size=None, scale_factor=None,
+        target_image_sample=None):
     mp_settings = motion_perception_settings.MotionPerceptionSettings()
     thr_static_px = 0.67
     thr_moving_pca_px = 1.33 # 2.0
@@ -466,7 +475,8 @@ def compute_correlation_images(
     assert(len(gripper_positions) == len(image_buffer))
     if not image_buffer:
         return None, None, None, None, None, None
-    target_image_sample = image_buffer[-1]
+    if target_image_sample is None:
+        target_image_sample = image_buffer[-1]
     for idx, (gripper, action, image_sample) in enumerate(
             zip(gripper_positions, action_codes, image_buffer)):
         if action < 0:

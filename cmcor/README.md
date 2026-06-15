@@ -179,3 +179,33 @@ python3 -m cmcor.motion_perception_comparison
 - ``grasp_segment_sampler.py`` - Sample cable segments likely suitable for grasping.
   - Test is using: ``python3 -m cmcor.grasp_segment_sampler``
 
+### Generate robot arm masks for a recorded sequence with SAM3
+
+The ROS recorder in ``franka_ros2_ws/src/cable_interact`` can record a CMCor
+sequence without robot arm masks. To generate ``arm_DDDDDDDD.png`` files from
+the recorded ``rgb_DDDDDDDD.png`` frames using the vendored SAM3 project, run:
+
+```
+~/miniconda3/envs/sam3/bin/python -m cmcor.generate_arm_masks_sam3 \
+  datasets/CMCor_multigrasp_board/motion_correlation_buffers/2026-05-28-173719 \
+  --overlay-dir output/sam3_arm_overlay/2026-05-28-173719
+```
+
+The script loads SAM3 once, skips existing masks so interrupted runs can resume,
+and sets ``poor_arm_masks`` to ``false`` in ``actions_gripper.json`` after every
+RGB frame has a corresponding arm mask. To inspect one frame before a full run,
+append ``--limit 1``. Use ``--overwrite`` to regenerate existing masks.
+
+When ``poor_arm_masks`` is ``false``, CMCor loads these masks and dilates them
+before filtering optical flow vectors that map into robot arm regions. This
+happens before correlation statistics or segmentation votes are computed.
+
+If the default ``robot arm`` prompt misses part of the gripper, merge an
+additional prompt into each generated mask:
+
+```
+~/miniconda3/envs/sam3/bin/python -m cmcor.generate_arm_masks_sam3 \
+  datasets/CMCor_multigrasp_board/motion_correlation_buffers/2026-05-28-173719 \
+  --prompt "robot arm" \
+  --prompt "white robot arm with gripper"
+```

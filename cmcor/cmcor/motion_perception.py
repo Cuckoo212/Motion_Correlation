@@ -67,13 +67,15 @@ class MotionPerception():
 
     def add_sample(
             self, rgb_image, arm_mask, ee_point, action_index,
-            depth_image=None):
+            depth_image=None, foreground_mask=None):
         if arm_mask is None:
             image_dict = {"rgb_image": rgb_image}
         else:
             image_dict = {"rgb_image": rgb_image, "arm_mask": arm_mask}
         if depth_image is not None:
             image_dict["depth_image"] = depth_image
+        if foreground_mask is not None:
+            image_dict["foreground_mask"] = foreground_mask
         self.image_buffer.append(image_dict)
         self.action_buffer.append(action_index)
         self.ee_point_buffer.append(ee_point)
@@ -170,6 +172,8 @@ class MotionPerception():
         rgb_path = os.path.join(folder, "rgb_{:08d}.png".format(idx))
         arm_path = os.path.join(folder, "arm_{:08d}.png".format(idx))
         depth_path = os.path.join(folder, "depth_{:08d}.png".format(idx))
+        foreground_path = os.path.join(
+            folder, "foreground_mask_{:08d}.png".format(idx))
         while os.path.isfile(rgb_path):
             rgb_image = cv2.imread(rgb_path, cv2.IMREAD_UNCHANGED)
             assert(rgb_image is not None)
@@ -184,11 +188,18 @@ class MotionPerception():
                 depth_image = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
                 assert(depth_image is not None)
                 image_dict["depth_image"] = depth_image
+            if os.path.isfile(foreground_path):
+                foreground_image = cv2.imread(
+                    foreground_path, cv2.IMREAD_UNCHANGED)
+                assert(foreground_image is not None)
+                image_dict["foreground_mask"] = foreground_image > 0
             self.image_buffer.append(image_dict)
             idx += 1
             rgb_path = os.path.join(folder, "rgb_{:08d}.png".format(idx))
             arm_path = os.path.join(folder, "arm_{:08d}.png".format(idx))
             depth_path = os.path.join(folder, "depth_{:08d}.png".format(idx))
+            foreground_path = os.path.join(
+                folder, "foreground_mask_{:08d}.png".format(idx))
         assert(len(self.image_buffer) == len(self.action_buffer))
 
     def compute_segmentation_images(self, thr_moving=2.0):
@@ -211,7 +222,8 @@ class MotionPerception():
         self.action2index = action2index
 
     def compute_correlation_images(
-            self, gripper_depth=None, focal_length=None, sample_point=None):
+            self, gripper_depth=None, focal_length=None, sample_point=None,
+            target_image_sample=None):
         if gripper_depth is None:
             gripper_depth = self.gripper_depth
         if focal_length is None:
@@ -233,7 +245,8 @@ class MotionPerception():
             use_dummy_flow=self.use_dummy_flow,
             crop_origin=self.crop_origin,
             crop_size=self.crop_size,
-            scale_factor=self.scale_factor)
+            scale_factor=self.scale_factor,
+            target_image_sample=target_image_sample)
         corr_imgs, action2index, moments, cod_images, a_images, flow_std_images = result
         self.corr_imgs = corr_imgs
         self.action2index = action2index
