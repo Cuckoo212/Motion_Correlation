@@ -74,14 +74,14 @@ def correlations_from_moments(moments):
     corr_imgs = []
     for action in moments:
         n = action["n_samples"]
-        corr = n*action["sum_fg"] - action["sum_f"]*action["sum_g"]
-        denom = np.sqrt(n*action["sum_f2"] - action["sum_f"]**2)
-        denom = denom * np.sqrt(n*action["sum_g2"] - action["sum_g"]**2)
+        corr = n*action["sum_fg"] - action["sum_f"]*action["sum_g"]#nΣfg - ΣfΣg
+        denom = np.sqrt(n*action["sum_f2"] - action["sum_f"]**2)   #sqrt(nΣf² - (Σf)²)
+        denom = denom * np.sqrt(n*action["sum_g2"] - action["sum_g"]**2)#sqrt(nΣf² - (Σf)²) * sqrt(nΣg² - (Σg)²)
         valid = denom > 1e-6
         corr[valid] = corr[valid] / denom[valid]
         corr[np.logical_not(valid)] = np.nan
         corr_imgs.append(corr)
-    return corr_imgs
+    return corr_imgs  #Pearson correlation corr =(nΣfg - ΣfΣg)/sqrt(nΣf² - (Σf)²) sqrt(nΣg² - (Σg)²)  结果是（1完全正相关 -1 完全负相关 0没有线性相关）只关心gripper 变大时，pixel flow 是否也规律变大或变小
 
 
 def linear_cod_from_moments(
@@ -149,15 +149,15 @@ def linear_cod_from_moments(
 
 def get_reference_position(gripper_position):
     #ref_pos = np.mean(gripper_position, axis=0)
-    ref_pos = gripper_position[0,:]
-    pca = sklearn.decomposition.PCA(n_components=1)
+    ref_pos = gripper_position[0,:] # take the first frame as reference 
+    pca = sklearn.decomposition.PCA(n_components=1) # 只保留1个主成分
     pca.fit(gripper_position - ref_pos[None,:])
-    vect = pca.components_[0,:]
+    vect = pca.components_[0,:]  #gripper 的主运动方向
     assert(abs(np.linalg.norm(vect) - 1.0) < 1e-4)
     return ref_pos, vect
 
 
-def update_v_flow(v_flow, relative_flow, d_flow, thr_moving):
+def update_v_flow(v_flow, relative_flow, d_flow, thr_moving):#relative_flow 是当前帧相对参考帧的二维光流
     sel = np.logical_and(
         np.abs(d_flow) > thr_moving,
         np.isnan(v_flow[...,0]))
