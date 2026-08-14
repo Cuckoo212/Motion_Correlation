@@ -1,8 +1,12 @@
 # Install a CUDA-compatible torch/torchvision build first.
 # SAM3's own runtime dependencies are declared by the editable package below.
+setuptools<81  # SAM3 currently imports pkg_resources.
 -e ./sam3_project
+einops
+decord
+pycocotools
 
 opencv-python
-open3d
+matplotlib
 pillow
 pyrealsense2

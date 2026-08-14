@@ -79,44 +79,90 @@ class FrameRecorder(threading.Thread):
             self.error = exc
 
 
-class Open3DViewer:
-    def __init__(self, enabled: bool) -> None:
+class MatplotlibViewer:
+    """Live Matplotlib 3D scatter matching view_saved_cable_ply's interface."""
+
+    def __init__(
+        self,
+        enabled: bool,
+        *,
+        width: int = 1280,
+        height: int = 800,
+        point_size: float = 8.0,
+        use_rgb: bool = False,
+    ) -> None:
         self.enabled = enabled
-        self.visualizer = None
-        self.cloud = None
+        self.closed = False
         if not enabled:
             return
         try:
-            import open3d as o3d
+            import matplotlib.pyplot as plt
         except ImportError as exc:
             raise RuntimeError(
-                "Open3D visualization requested but open3d is not installed. "
+                "Matplotlib visualization requested but matplotlib is not installed. "
                 "Install it or run with --no-view."
             ) from exc
-        self.o3d = o3d
-        self.visualizer = o3d.visualization.Visualizer()
-        self.visualizer.create_window("Realtime SAM3 Cable Point Cloud")
-        self.cloud = o3d.geometry.PointCloud()
-        self.visualizer.add_geometry(self.cloud)
-        coordinate = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-        self.visualizer.add_geometry(coordinate)
+        self.plt = plt
+        self.point_size = point_size
+        self.use_rgb = use_rgb
+        plt.ion()
+        self.figure = plt.figure(
+            "Realtime SAM3 Cable Point Cloud",
+            figsize=(width / 100.0, height / 100.0),
+            dpi=100,
+        )
+        self.axes = self.figure.add_subplot(1, 1, 1, projection="3d")
+        self.scatter = self.axes.scatter([], [], [], s=point_size, depthshade=True)
+        self.axes.set_xlabel("X [m]")
+        self.axes.set_ylabel("Y [m]")
+        self.axes.set_zlabel("Z [m]")
+        self.axes.set_title("Cable Point Cloud (camera) — waiting for first frame")
+        self.figure.canvas.mpl_connect("close_event", self._on_close)
+        self.figure.tight_layout()
+        plt.show(block=False)
+        self.figure.canvas.draw_idle()
+        self.figure.canvas.flush_events()
+
+    def _on_close(self, _event: object) -> None:
+        self.closed = True
+
+    def _set_equal_axes(self, points: np.ndarray) -> None:
+        if not len(points):
+            return
+        mins = points.min(axis=0)
+        maxs = points.max(axis=0)
+        centers = 0.5 * (mins + maxs)
+        radius = 0.5 * float(np.max(maxs - mins))
+        if radius <= 0:
+            radius = 0.05
+        self.axes.set_xlim(centers[0] - radius, centers[0] + radius)
+        self.axes.set_ylim(centers[1] - radius, centers[1] + radius)
+        self.axes.set_zlim(centers[2] - radius, centers[2] + radius)
 
     def update(self, points: np.ndarray, colors: np.ndarray | None) -> bool:
         if not self.enabled:
             return True
-        self.cloud.points = self.o3d.utility.Vector3dVector(points)
-        if colors is not None:
-            self.cloud.colors = self.o3d.utility.Vector3dVector(
-                colors.astype(np.float64) / 255.0
-            )
-        self.visualizer.update_geometry(self.cloud)
-        alive = self.visualizer.poll_events()
-        self.visualizer.update_renderer()
-        return bool(alive)
+        if self.closed or not self.plt.fignum_exists(self.figure.number):
+            return False
+        self.scatter._offsets3d = (points[:, 0], points[:, 1], points[:, 2])
+        if self.use_rgb and colors is not None and len(colors) == len(points):
+            rgb = colors.astype(np.float64) / 255.0
+            self.scatter.set_facecolor(rgb)
+            self.scatter.set_edgecolor(rgb)
+        else:
+            default_blue = np.array([[31.0 / 255.0, 119.0 / 255.0, 180.0 / 255.0, 1.0]])
+            self.scatter.set_facecolor(default_blue)
+            self.scatter.set_edgecolor(default_blue)
+        self._set_equal_axes(points)
+        self.axes.set_title(f"Cable Point Cloud (camera) — {len(points)} points")
+        self.figure.canvas.draw_idle()
+        self.figure.canvas.flush_events()
+        return not self.closed
 
     def close(self) -> None:
-        if self.visualizer is not None:
-            self.visualizer.destroy_window()
+        if self.enabled and not self.closed:
+            self.plt.close(self.figure)
+            self.closed = True
 
 
 def parse_args() -> argparse.Namespace:
@@ -143,12 +189,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-depth-mm", type=int, default=2000)
     parser.add_argument("--voxel-size-mm", type=float, default=2.0)
     parser.add_argument(
-        "--save-cloud-every",
-        type=int,
-        default=0,
-        help="Save one binary PLY every N SAM results; 0 saves only latest.ply.",
-    )
-    parser.add_argument(
         "--reuse-last-mask",
         action="store_true",
         help=(
@@ -157,6 +197,19 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--no-view", action="store_true")
+    parser.add_argument("--view-width", type=int, default=1280)
+    parser.add_argument("--view-height", type=int, default=800)
+    parser.add_argument(
+        "--point-size",
+        type=float,
+        default=8.0,
+        help="Rendered point size in the Matplotlib 3D scatter window.",
+    )
+    parser.add_argument(
+        "--view-rgb",
+        action="store_true",
+        help="Show saved RGB point colors instead of the original blue scatter.",
+    )
     parser.add_argument("--max-frames", type=int, default=0)
     return parser.parse_args()
 
@@ -190,7 +243,13 @@ def main() -> None:
         max_area_ratio=args.max_area_ratio,
         selection=args.selection,
     )
-    viewer = Open3DViewer(not args.no_view)
+    viewer = MatplotlibViewer(
+        not args.no_view,
+        width=args.view_width,
+        height=args.view_height,
+        point_size=args.point_size,
+        use_rgb=args.view_rgb,
+    )
 
     pipeline = rs.pipeline()
     config = rs.config()
@@ -244,13 +303,12 @@ def main() -> None:
     stop = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     frame_index = 0
-    inference_count = 0
     last_mask: np.ndarray | None = None
     statistics: list[dict] = []
 
     print(f"Dataset sequence: {sequence_dir}")
     print(f"Point-cloud output: {output_dir}")
-    print("Press Ctrl-C or close the Open3D window to stop.")
+    print("Press Ctrl-C or close the Matplotlib window to stop.")
     try:
         while not stop.is_set():
             frames = align.process(pipeline.wait_for_frames())
@@ -294,22 +352,11 @@ def main() -> None:
                 colors,
                 args.voxel_size_mm * 0.001,
             )
-            save_ply(output_dir / "latest.ply", points, colors)
-            if (
-                args.save_cloud_every > 0
-                and inference_count % args.save_cloud_every == 0
-            ):
-                save_ply(
-                    output_dir / f"cable_{frame_index:08d}.ply",
-                    points,
-                    colors,
-                )
-            overlay = rgb_bgr.copy()
-            overlay[mask > 0] = (
-                overlay[mask > 0].astype(np.float32) * 0.55
-                + np.array([0.0, 0.0, 255.0]) * 0.45
-            ).astype(np.uint8)
-            cv2.imwrite(str(output_dir / "latest_overlay.png"), overlay)
+            save_ply(
+                output_dir / f"cable_camera_{frame_index:08d}.ply",
+                points,
+                colors,
+            )
             statistics.append(
                 {
                     "frame_index": frame_index,
@@ -328,7 +375,6 @@ def main() -> None:
             )
             if not viewer.update(points, colors):
                 stop.set()
-            inference_count += 1
             frame_index += 1
             if args.max_frames and frame_index >= args.max_frames:
                 stop.set()
@@ -354,7 +400,7 @@ def main() -> None:
             },
         )
         atomic_json(
-            output_dir / "processing_stats.json",
+            sequence_dir / "processing_stats.json",
             {
                 "sequence_name": sequence_name,
                 "captured_frames": len(recorder.frame_metadata),

@@ -32,7 +32,10 @@ def depth_mask_to_points(
     )
     v, u = np.nonzero(valid)
     if not len(u):
-        return np.empty((0, 3), np.float32), None
+        empty_colors = (
+            None if rgb_bgr is None else np.empty((0, 3), dtype=np.uint8)
+        )
+        return np.empty((0, 3), np.float32), empty_colors
 
     z = depth_mm[v, u].astype(np.float32) * 0.001
     fx, fy = float(camera_matrix[0, 0]), float(camera_matrix[1, 1])
@@ -63,23 +66,9 @@ def save_ply(
     points: np.ndarray,
     colors: np.ndarray | None = None,
 ) -> None:
-    """Save a compact binary little-endian PLY."""
+    """Save an ASCII PLY compatible with cable_camera_frame.ply examples."""
     path.parent.mkdir(parents=True, exist_ok=True)
     has_color = colors is not None and len(colors) == len(points)
-    dtype_fields: list[tuple[str, str]] = [
-        ("x", "<f4"),
-        ("y", "<f4"),
-        ("z", "<f4"),
-    ]
-    if has_color:
-        dtype_fields.extend([("red", "u1"), ("green", "u1"), ("blue", "u1")])
-    vertices = np.empty(len(points), dtype=np.dtype(dtype_fields))
-    for column, name in enumerate(("x", "y", "z")):
-        vertices[name] = points[:, column]
-    if has_color:
-        for column, name in enumerate(("red", "green", "blue")):
-            vertices[name] = colors[:, column]
-
     color_header = (
         "property uchar red\nproperty uchar green\nproperty uchar blue\n"
         if has_color
@@ -87,12 +76,25 @@ def save_ply(
     )
     header = (
         "ply\n"
-        "format binary_little_endian 1.0\n"
+        "format ascii 1.0\n"
         f"element vertex {len(points)}\n"
         "property float x\nproperty float y\nproperty float z\n"
         f"{color_header}"
         "end_header\n"
     )
-    with path.open("wb") as stream:
-        stream.write(header.encode("ascii"))
-        vertices.tofile(stream)
+    temporary = path.with_name(f".{path.name}.tmp")
+    with temporary.open("w", encoding="ascii", newline="\n") as stream:
+        stream.write(header)
+        if len(points):
+            if has_color:
+                vertices = np.column_stack(
+                    (points.astype(np.float64), colors.astype(np.uint8))
+                )
+                np.savetxt(
+                    stream,
+                    vertices,
+                    fmt=("%.6f", "%.6f", "%.6f", "%d", "%d", "%d"),
+                )
+            else:
+                np.savetxt(stream, points, fmt="%.6f")
+    temporary.replace(path)
