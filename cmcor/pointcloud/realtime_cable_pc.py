@@ -4,12 +4,10 @@
 from __future__ import annotations
 
 import argparse
-import json
 import queue
 import signal
 import threading
 import time
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -18,6 +16,7 @@ import numpy as np
 
 from .geometry import depth_mask_to_points, save_ply, voxel_downsample
 from .sam3_segmenter import Sam3CableSegmenter
+from .runtime import Frame, FrameRecorder, MatplotlibViewer, atomic_json
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -26,146 +25,8 @@ DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "output" / "realtime_cable_pc"
 DEFAULT_SAM3_PROJECT = Path(__file__).resolve().parent / "sam3_project"
 
 
-@dataclass(frozen=True)
-class Frame:
-    index: int
-    timestamp_ns: int
-    rgb_bgr: np.ndarray
-    depth_mm: np.ndarray
 
-
-def atomic_json(path: Path, value: object) -> None:
-    temporary = path.with_name(f".{path.name}.tmp")
-    with temporary.open("w", encoding="utf-8") as stream:
-        json.dump(value, stream, indent=2, sort_keys=True)
-        stream.write("\n")
-    temporary.replace(path)
-
-
-class FrameRecorder(threading.Thread):
-    def __init__(
-        self,
-        sequence_dir: Path,
-        frame_queue: "queue.Queue[Frame | None]",
-    ) -> None:
-        super().__init__(name="rgbd-recorder", daemon=False)
-        self.sequence_dir = sequence_dir
-        self.frame_queue = frame_queue
-        self.error: Exception | None = None
-        self.frame_metadata: list[dict] = []
-
-    def run(self) -> None:
-        try:
-            while True:
-                frame = self.frame_queue.get()
-                if frame is None:
-                    return
-                stem = f"{frame.index:08d}"
-                rgb_path = self.sequence_dir / f"rgb_{stem}.png"
-                depth_path = self.sequence_dir / f"depth_{stem}.png"
-                if not cv2.imwrite(str(rgb_path), frame.rgb_bgr):
-                    raise OSError(f"Failed to save {rgb_path}")
-                if not cv2.imwrite(str(depth_path), frame.depth_mm):
-                    raise OSError(f"Failed to save {depth_path}")
-                self.frame_metadata.append(
-                    {
-                        "frame_index": frame.index,
-                        "timestamp_ns": frame.timestamp_ns,
-                        "rgb": rgb_path.name,
-                        "depth": depth_path.name,
-                    }
-                )
-        except Exception as exc:  # noqa: BLE001
-            self.error = exc
-
-
-class MatplotlibViewer:
-    """Live Matplotlib 3D scatter matching view_saved_cable_ply's interface."""
-
-    def __init__(
-        self,
-        enabled: bool,
-        *,
-        width: int = 1280,
-        height: int = 800,
-        point_size: float = 8.0,
-        use_rgb: bool = False,
-    ) -> None:
-        self.enabled = enabled
-        self.closed = False
-        if not enabled:
-            return
-        try:
-            import matplotlib.pyplot as plt
-        except ImportError as exc:
-            raise RuntimeError(
-                "Matplotlib visualization requested but matplotlib is not installed. "
-                "Install it or run with --no-view."
-            ) from exc
-        self.plt = plt
-        self.point_size = point_size
-        self.use_rgb = use_rgb
-        plt.ion()
-        self.figure = plt.figure(
-            "Realtime SAM3 Cable Point Cloud",
-            figsize=(width / 100.0, height / 100.0),
-            dpi=100,
-        )
-        self.axes = self.figure.add_subplot(1, 1, 1, projection="3d")
-        self.scatter = self.axes.scatter([], [], [], s=point_size, depthshade=True)
-        self.axes.set_xlabel("X [m]")
-        self.axes.set_ylabel("Y [m]")
-        self.axes.set_zlabel("Z [m]")
-        self.axes.set_title("Cable Point Cloud (camera) — waiting for first frame")
-        self.figure.canvas.mpl_connect("close_event", self._on_close)
-        self.figure.tight_layout()
-        plt.show(block=False)
-        self.figure.canvas.draw_idle()
-        self.figure.canvas.flush_events()
-
-    def _on_close(self, _event: object) -> None:
-        self.closed = True
-
-    def _set_equal_axes(self, points: np.ndarray) -> None:
-        if not len(points):
-            return
-        mins = points.min(axis=0)
-        maxs = points.max(axis=0)
-        centers = 0.5 * (mins + maxs)
-        radius = 0.5 * float(np.max(maxs - mins))
-        if radius <= 0:
-            radius = 0.05
-        self.axes.set_xlim(centers[0] - radius, centers[0] + radius)
-        self.axes.set_ylim(centers[1] - radius, centers[1] + radius)
-        self.axes.set_zlim(centers[2] - radius, centers[2] + radius)
-
-    def update(self, points: np.ndarray, colors: np.ndarray | None) -> bool:
-        if not self.enabled:
-            return True
-        if self.closed or not self.plt.fignum_exists(self.figure.number):
-            return False
-        self.scatter._offsets3d = (points[:, 0], points[:, 1], points[:, 2])
-        if self.use_rgb and colors is not None and len(colors) == len(points):
-            rgb = colors.astype(np.float64) / 255.0
-            self.scatter.set_facecolor(rgb)
-            self.scatter.set_edgecolor(rgb)
-        else:
-            default_blue = np.array([[31.0 / 255.0, 119.0 / 255.0, 180.0 / 255.0, 1.0]])
-            self.scatter.set_facecolor(default_blue)
-            self.scatter.set_edgecolor(default_blue)
-        self._set_equal_axes(points)
-        self.axes.set_title(f"Cable Point Cloud (camera) — {len(points)} points")
-        self.figure.canvas.draw_idle()
-        self.figure.canvas.flush_events()
-        return not self.closed
-
-    def close(self) -> None:
-        if self.enabled and not self.closed:
-            self.plt.close(self.figure)
-            self.closed = True
-
-
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None, *, remote: bool = False) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Capture aligned RealSense RGB-D, run SAM3 cable segmentation, "
@@ -182,9 +43,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-area-ratio", type=float, default=0.0001)
     parser.add_argument("--max-area-ratio", type=float, default=0.5)
     parser.add_argument("--selection", choices=("union", "best"), default="union")
-    parser.add_argument("--width", type=int, default=640)
-    parser.add_argument("--height", type=int, default=480)
-    parser.add_argument("--fps", type=int, default=30)
+    if remote:
+        parser.description = "Receive remote RGB-D and run SAM3 cable point-cloud processing."
+        parser.add_argument("--socket-path", type=Path, default=Path("/tmp/cable_rgbd.sock"))
+        parser.add_argument("--receive-timeout", type=float, default=10.0)
+    else:
+        parser.add_argument("--width", type=int, default=640)
+        parser.add_argument("--height", type=int, default=480)
+        parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--min-depth-mm", type=int, default=150)
     parser.add_argument("--max-depth-mm", type=int, default=2000)
     parser.add_argument("--voxel-size-mm", type=float, default=2.0)
@@ -211,7 +77,7 @@ def parse_args() -> argparse.Namespace:
         help="Show saved RGB point colors instead of the original blue scatter.",
     )
     parser.add_argument("--max-frames", type=int, default=0)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> None:
