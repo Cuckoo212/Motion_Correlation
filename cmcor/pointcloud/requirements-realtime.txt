@@ -5,6 +5,7 @@ setuptools<81  # SAM3 currently imports pkg_resources.
 einops
 decord
 pycocotools
+psutil
 
 opencv-python
 matplotlib

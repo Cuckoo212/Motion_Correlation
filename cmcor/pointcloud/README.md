@@ -1,197 +1,192 @@
-# RealSense + SAM3 Cable 点云
+# cable_pointcloud：ROS 2 Humble 实时 Cable 点云
 
-采集对齐的 RGB-D，用 SAM3 的 `cable` 提示生成 Mask，再反投影为 Cable-only
-点云，保存图像、元数据和逐帧 PLY。支持相机直连 GPU PC，或相机连接 Mini PC、
-通过 ROS 2 将图像送至 GPU PC。
+ROS 包和 Python 模块统一命名为 `cable_pointcloud`，旧 `pointcloud` Python 模块、
+独立直连入口及 TCP 点云回传代码已删除。外层 `pointcloud/` 仅作为包源码目录保留，
+以保持权重和挂载路径稳定。GPU 节点全部在一个 Humble + SAM3 Docker 容器内运行。
 
-## 1. 代码结构
+## 1. 五节点流程
 
 ```text
-/home/flexcycle/Motion_Correlation/cmcor/pointcloud/
-├── __init__.py
-├── realtime_cable_pc.py       # 相机直连：采集、SAM3、点云、保存和显示
-├── ros2_capture_publisher.py  # Mini PC：采集、对齐、ROS 2 发布
-├── ros2_frame_receiver.py     # GPU PC：ROS 2 接收、精确配对、缓存最新帧
-├── remote_cable_pc.py         # GPU PC：获取接收帧、SAM3、点云、保存和显示
-├── rgbd_transport.py          # 图像解码、帧配对、最新帧缓存和 Unix socket 协议
-├── runtime.py                 # 共用录制、JSON 保存和 Matplotlib 显示
-├── sam3_segmenter.py          # SAM3 分割封装
-├── geometry.py               # Mask + Depth 反投影、体素下采样、PLY 保存
-├── view_saved_cable_ply.py    # 查看已保存点云
-├── requirements-realtime.txt # GPU 推理环境依赖
-├── tests/test_rgbd_transport.py
-└── sam3_project/              # 本地 SAM3 源码
+Mini PC                              GPU PC：Humble + SAM3 Docker
+
+① 相机采集发布节点 ── RGB-D ───────→ ② RGB-D 接收节点
+                                          ↓ 最新完整帧对
+                                    ③ SAM3 点云计算节点
+                                          ↓ 点云结果
+⑤ 点云接收显示节点 ←─ PointCloud2 ── ④ 点云发布节点
+```
+
+| 节点 | 运行位置 | 职责 |
+| --- | --- | --- |
+| ① `rgbd_capture_publisher` | Mini PC | 采集 RealSense、对齐彩色和深度、发布图像及相机信息 |
+| ② `rgbd_receiver` | GPU Docker | 订阅图像，按时间戳配对，缓存最新完整 RGB-D 帧 |
+| ③ `sam3_pointcloud` | GPU Docker | SAM3 分割、深度反投影、下采样、保存图像和 PLY，输出点云结果 |
+| ④ `pointcloud_publisher` | GPU Docker | 发布标准 `sensor_msgs/msg/PointCloud2`，通过 ROS 2 回传 |
+| ⑤ `pointcloud_viewer` | Mini PC | 订阅点云，在 Mini PC 本地显示 Matplotlib 实时窗口 |
+
+采集和图像发布放在同一个节点，因为它们共用相机数据，拆开会增加一次数据传递。
+GPU 端保留接收、计算、发布三个节点，让 ROS 通信和较慢的 GPU 推理独立运行；
+显示或点云回传中断时，推理仍可继续保存结果。RGB-D 输入断流超过超时则保存元数据并退出。
+
+GPU 三个节点放在同一个 Humble + SAM3 容器。接收和发布节点使用 Humble 系统 Python；
+计算节点使用可访问 Humble `rclpy` 的 SAM3 Python 环境。接收至计算使用有界的最新帧缓存和
+本地 Unix socket；点云通过有界 ROS 话题队列传给发布节点。跨机器统一使用 ROS 2 DDS，
+替代旧 TCP 点云回传方案。
+
+## 2. 代码结构
+
+```text
+pointcloud/                         # ROS 包源码根目录
+├── package.xml                     # ament_python 包声明
+├── setup.py / setup.cfg             # 安装和 ros2 run 入口
+├── resource/cable_pointcloud        # ament 包索引
+├── cable_pointcloud/                # 唯一 Python 模块
+│   ├── __init__.py
+│   ├── rgbd_capture_publisher.py     # ① 相机采集发布
+│   ├── rgbd_receiver.py              # ② 接收、配对、socket 服务
+│   ├── ros_nodes.py                  # ③④⑤ ROS 入口和 PointCloud2 编解码
+│   ├── inference.py                  # SAM3、点云保存和频率统计
+│   ├── inference_args.py             # 推理参数
+│   ├── sam3_segmenter.py             # SAM3 封装
+│   ├── rgbd_transport.py             # 最新帧缓存和本地协议
+│   ├── geometry.py                   # 反投影、下采样、PLY
+│   └── runtime.py                    # JSON 和 Matplotlib 显示
+├── launch/
+│   ├── mini_pc.launch.py             # ①⑤
+│   └── gpu_pc.launch.py              # ②③④
+├── docker/
+│   ├── Dockerfile.sam3               # Humble + SAM3 单镜像
+│   ├── compose.yaml                  # 唯一 gpu 服务
+│   ├── ros-entrypoint.sh             # 自动加载 ROS 环境
+│   ├── build-sam3.sh                 # 安装 GPU 容器运行时、构建、自检
+│   └── runtime/                      # socket 目录，不提交 Git
+├── requirements-realtime.txt
+├── tests/
+└── sam3_project/                     # 独立 SAM3 源码和权重
+    ├── COLCON_IGNORE                # 不作为 ROS 包构建
     ├── sam3/
-    ├── checkpoints/           # 默认权重：sam3.pt
-    ├── pyproject.toml
-    └── LICENSE
+    └── checkpoints/sam3.pt           # 权重不提交 Git
 ```
 
-从仓库根目录使用 `python -m pointcloud.<模块>` 启动，无需 `colcon build`。
-默认数据和权重路径随仓库位置确定；GPU PC 使用其实际仓库路径。
+## 3. GPU PC 构建：在宿主机执行
 
-## 2. 环境准备
-
-| 进程 | Python 环境 | 主要依赖 |
-|---|---|---|
-| Mini PC 采集发布 | ROS 2 系统 Python | rclpy、sensor_msgs、std_msgs、NumPy、OpenCV、pyrealsense2 |
-| GPU PC 接收 | ROS 2 系统 Python | rclpy、sensor_msgs、std_msgs、NumPy |
-| GPU PC 直连 / 远程推理 | 独立 SAM3 Conda 环境 | CUDA PyTorch、SAM3、OpenCV、NumPy、Pillow、Matplotlib；直连另需 pyrealsense2 |
-
-当前 Mini PC 为 ROS 2 Humble，使用 `/usr/bin/python3`（Python 3.10），不要用
-默认的 Python 3.13 启动 ROS 节点。GPU 上的 ROS 和 SAM3 分进程运行，避免混用环境。
-
-GPU 原有已验证环境为 `realtime-cable-pc`（Python 3.12、PyTorch 2.7.0+cu126、
-torchvision 0.22.0）。已有环境可直接使用；重建时先安装匹配 CUDA 的 PyTorch，
-再在 `pointcloud/` 下安装 `requirements-realtime.txt`。权重放在
-`pointcloud/sam3_project/checkpoints/sam3.pt`，或用 `--checkpoint` 指定。
-
-下文 GPU 示例使用原主机路径 `/home/qihang/...`，请按实际路径替换。
-启动采集前关闭 `realsense-viewer`、`realsense2_camera` 等占用相机的进程。
-
-## 3. 模式 A：相机直连 GPU PC
-
-```text
-相机 USB → GPU PC：采集与对齐 → SAM3 → 点云 → 保存 / 显示
-```
-
-**执行顺序：连接相机 → 检查 GPU 环境与权重 → 启动原入口。**
-所有命令在 GPU PC 执行，不需要 ROS 发布或接收节点。
+先停止旧推理和采集。旧 receiver/inference 容器若还在运行，用 `sudo docker ps`
+找到容器名，再用 `sudo docker stop <容器名>` 停止，避免 socket 被占用。
 
 ```bash
-cd /home/qihang/Motion_Correlation/cmcor
-unset PYTHONPATH
-/home/qihang/miniconda3/envs/realtime-cable-pc/bin/python \
-  -m pointcloud.realtime_cable_pc
+cd /home/flexcycle/qihang/Motion_Correlation/cmcor/pointcloud/docker
+mkdir -p runtime
+sudo docker compose build gpu
 ```
 
-默认显示 Matplotlib 点云窗口；纯 SSH 终端加 `--no-view`。
-首次可加 `--max-frames 1 --no-view` 做单帧自检。
-按 `Ctrl-C` 或关闭窗口停止，等待元数据保存完成。
+镜像使用 Ubuntu 22.04、ROS 2 Humble、Python 3.10 SAM3 venv、PyTorch 2.7.0+cu128。
+构建时安装 requirements-realtime.txt，并执行 colcon build。权重从宿主机挂载，
+不打包到镜像中。修改代码后需重建镜像。
 
-## 4. 模式 B：相机连接 Mini PC，SSH 操作 GPU PC
-
-```text
-Mini PC：相机 USB → 采集、对齐 → ROS 2 DDS 网络
-GPU PC：ROS 接收、配对 → 最新帧缓存 → 本机 Unix socket → SAM3、点云、保存
-```
-
-两台机器都需要最新代码，建议使用相同 ROS 2 发行版和有线千兆局域网。
-**SSH 用于登录和启动命令，图像通过 ROS 2 DDS 传输。** SSH 能登录不代表
-DDS 已连通；两台机器须允许 DDS 发现和数据通信，普通 SSH 隧道不能自动替代它。
-
-### 步骤 1：Mini PC 终端 A，启动采集发布
+宿主机须已配置 NVIDIA Container Toolkit；首次安装可执行以下脚本，注意它会重启 Docker：
 
 ```bash
-cd /home/flexcycle/Motion_Correlation/cmcor
+bash build-sam3.sh
+```
+
+## 4. Mini PC 构建：在 Mini PC 执行
+
+同步新包源码，无需复制 GPU 权重。以下仓库路径按实际位置替换。
+使用 Humble 系统 Python，保留已有 pyrealsense2。
+
+```bash
+sudo apt install python3-colcon-common-extensions python3-opencv python3-matplotlib
 source /opt/ros/humble/setup.bash
+mkdir -p ~/cable_ws/src
+ln -s /home/flexcycle/Motion_Correlation/cmcor/pointcloud ~/cable_ws/src/cable_pointcloud
+cd ~/cable_ws
+colcon build --packages-select cable_pointcloud
+source install/setup.bash
+/usr/bin/python3 -c 'import pyrealsense2'
+```
+
+软链接已存在时跳过 ln 命令。不要加载旧包的安装环境。
+
+## 5. 启动
+
+### Mini PC：本地桌面终端
+
+关闭占用相机的程序。一次启动采集发布和点云显示：
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/cable_ws/install/setup.bash
 export ROS_DOMAIN_ID=42
 export ROS_LOCALHOST_ONLY=0
-/usr/bin/python3 -m pointcloud.ros2_capture_publisher \
-  --width 640 --height 480 --fps 30 --publish-fps 5
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+ros2 launch cable_pointcloud mini_pc.launch.py publish_fps:=10
 ```
 
-默认采集 30 Hz、最多发布 5 Hz，不在 Mini PC 保存文件。
-可加 `--serial <相机序列号>`；需要本地原始 RGB-D 录制时，加
-`--record-root /home/flexcycle/Motion_Correlation/cmcor/datasets/raw_rgbd`。
-本地同步写 PNG，受磁盘与 CPU 影响，不保证完整保留 30 Hz 的每一帧。
+相机采集 30 Hz；publish_fps 可设为 5、10 或 30 Hz。配置值不保证实际频率。
 
-### 步骤 2：终端 B，SSH 登录 GPU PC，启动接收
+### GPU PC：先进入 Docker，再在容器内启动
 
-在 Mini PC 新终端执行：
+在 GPU 宿主机终端或 SSH 终端执行：
 
 ```bash
-ssh <GPU用户名>@<GPU地址>
+cd /home/flexcycle/qihang/Motion_Correlation/cmcor/pointcloud/docker
+# 构建镜像
+sudo docker compose build gpu
+
+# 使用镜像创建并进入容器
+sudo docker compose run --rm --no-deps gpu bash
+```
+创建容器时，镜像配置的入口脚本 ros-entrypoint.sh 会先执行source humble和source cable_ws,所以不需要手动source。现在已进入容器，以下命令在容器内执行。入口脚本已自动加载 Humble 和 ROS 包：
+
+```bash
+ros2 pkg executables cable_pointcloud
+ros2 launch cable_pointcloud gpu_pc.launch.py
 ```
 
-登录后，以下命令在 **GPU PC** 执行：
+一次启动接收、SAM3 计算和点云发布；GPU 无需桌面窗口，在 Mini PC 查看点云。
+输入等待及断流超时默认 60 秒，建议先启动 Mini PC。
+
+也可以在宿主机直接启动容器中的 launch，无需先进入 bash：
 
 ```bash
-cd /home/qihang/Motion_Correlation/cmcor
-source /opt/ros/humble/setup.bash
-export ROS_DOMAIN_ID=42
-export ROS_LOCALHOST_ONLY=0
+sudo docker compose run --rm --no-deps gpu
+```
+
+两种方式二选一，不要同时重复启动。
+
+## 6. 检查、输出和停止
+
+在 Mini PC 已加载 ROS 包的终端或 GPU 容器内执行：
+
+```bash
+ros2 node list
 ros2 topic list
-/usr/bin/python3 -m pointcloud.ros2_frame_receiver \
-  --socket-path /tmp/cable_rgbd.sock
+ros2 topic hz /cable_camera/cable_points
 ```
 
-应看到 `/cable_camera/` 下的 `color/image_raw`、`aligned_depth/image_raw`、
-`color/camera_info`、`metadata` 四个话题。接收日志每 5 秒显示配对计数，
-确认持续增长后再启动推理。若未收到数据，检查域 ID、网卡、RMW 和防火墙。
+RGB-D 输入话题为 `/cable_camera/` 下的 color/image_raw、aligned_depth/image_raw、
+color/camera_info、metadata。内部点云为 `/cable_pointcloud/internal`，最终回传点云为
+`/cable_camera/cable_points`，坐标单位为米，保留相机 frame_id 和采集时间戳。
+点云接收使用 BEST_EFFORT QoS，显示最新结果。
 
-### 步骤 3：终端 C，另开 SSH，启动 GPU 推理
-
-在 Mini PC 另一个终端执行：
-
-```bash
-ssh <GPU用户名>@<GPU地址>
-```
-
-登录后，以下命令在 **GPU PC** 执行，不需要加载 ROS 环境：
-
-```bash
-cd /home/qihang/Motion_Correlation/cmcor
-unset PYTHONPATH
-/home/qihang/miniconda3/envs/realtime-cable-pc/bin/python \
-  -m pointcloud.remote_cable_pc \
-  --socket-path /tmp/cable_rgbd.sock --no-view
-```
-
-首次可加 `--max-frames 1 --sequence-name remote_smoke_test` 做单帧自检。
-需要交互窗口时，在 GPU PC 本地桌面终端运行推理命令，去掉 `--no-view`。
-接收与推理须使用相同 socket 路径，并以同一 GPU 用户运行。
-
-### 步骤 4：停止
-
-依次在 **GPU 推理终端 C → GPU 接收终端 B → Mini PC 采集终端 A** 按
-`Ctrl-C`；先等待推理元数据保存完成。接收节点正常退出会清理 socket。
-异常退出遗留 socket 时，确认旧进程已停止后再清理，或换一个 socket 路径。
-断流超过默认 10 秒会结束推理并保存已完成帧，可用 `--receive-timeout` 调整；
-恢复后使用新序列名重新启动推理。
-
-## 5. 输出与常用参数
-
-两种模式均在 GPU PC 仓库下保存：
+GPU 终端每约 5 秒打印配置采集/发布频率、实际接收/点云频率、SAM3 平均耗时及跳过帧数。
+图像、mask、元数据和 PLY 保存在 GPU 宿主机：
 
 ```text
- datasets/realtime_cable_pc/<序列名>/
-   rgb_00000000.png、depth_00000000.png、mask_00000000.png、…
-   camera_info.json、frames.json、processing_stats.json
- output/realtime_cable_pc/<序列名>/
-   cable_camera_00000000.ply、…
+cmcor/datasets/realtime_cable_pc/<序列名>/
+cmcor/output/realtime_cable_pc/<序列名>/
 ```
 
-默认序列名为启动时间；`--sequence-name` 不可重复。同序号 RGB、Depth、Mask、
-PLY 一一对应，Depth PNG 为 uint16 毫米，PLY 坐标单位为米；无有效点仍保存空 PLY。
-相机信息记录内参和深度约定，帧索引与统计记录时间戳、推理耗时及点数。
+先在 GPU launch 终端按 Ctrl-C，等待元数据保存完成，再停止 Mini PC launch。
+若进入 bash 启动，最后输入 exit 退出容器。配对计数不增长时检查发布节点、域 ID、
+RMW、网络及防火墙。异常退出遗留 socket 时，先确认旧进程停止再清理。
 
-| 参数 | 用途 |
-|---|---|
-| `--no-view` / `--view-rgb` | 关闭窗口 / 使用真实 RGB 点颜色 |
-| `--max-frames 1` | 单帧自检 |
-| `--checkpoint <路径>` | 指定 SAM3 权重 |
-| `--selection union` / `best` | 合并候选 / 仅保留最高分实例 |
-| `--min-depth-mm` / `--max-depth-mm` | 深度范围，默认 150–2000 mm |
-| `--voxel-size-mm` | 下采样大小，默认 2 mm |
-| `--dataset-root` / `--output-root` | 指定图像与点云保存根目录 |
+## 7. 测试
 
-各入口的全部参数使用 `--help` 查看。远程模式的分辨率、采集 / 发布频率在
-Mini PC 发布端设置，远程推理不接受 `--reuse-last-mask`。
-
-远程模式只处理最新完整帧对，跳过中间帧以避免积压；GPU 仅保存参与推理的帧。
-若启用 Mini PC 录制，可通过 `timestamp_ns` 关联原始帧。640×480 原始 RGB-D
-在 5 Hz 下约占 61 Mb/s（不含协议开销）。点云频率仍受 SAM3 速度限制：原
-RTX 3060 Ti 在 640×480 下约 703 ms/帧、1.4 Hz，其他 GPU 需实测。
-跨机输入 / 结果年龄统计需两台机器同步时钟，不能直接当作精确网络延迟。
-
-## 6. 验证
-
-无相机 / GPU 测试（在仓库根目录）：
+在包源码根目录加载 ROS 环境后执行：
 
 ```bash
-/usr/bin/python3 -m unittest discover -s pointcloud/tests -v
+python3 -m unittest discover -s tests -v
 ```
 
-已有验证：5 项传输与保存测试通过，Mini PC 真实 RealSense 的本机 ROS 2
-采集、配对和取帧通过；跨机网络及目标 GPU 的实际 SAM3 推理仍需单帧自检。
+完整测试依赖 SAM3 运行依赖及 rclpy；真实相机、Humble 镜像和跨机通信需在目标环境验证。

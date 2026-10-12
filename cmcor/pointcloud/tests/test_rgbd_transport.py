@@ -4,13 +4,13 @@ import threading
 import unittest
 from types import SimpleNamespace
 import numpy as np
-from pointcloud.rgbd_transport import (FramePairer, LatestFrame, decode_image,
+from cable_pointcloud.rgbd_transport import (FramePairer, LatestFrame, decode_image,
                                       send_frame, receive_frame)
 
 
 class TransportTests(unittest.TestCase):
     def test_socket_roundtrip_and_latest_request(self):
-        from pointcloud.ros2_frame_receiver import serve
+        from cable_pointcloud.rgbd_receiver import serve
         import tempfile
         from pathlib import Path
         with tempfile.TemporaryDirectory() as directory:
@@ -49,8 +49,8 @@ class TransportTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from unittest.mock import patch
-        from pointcloud import remote_cable_pc
-        from pointcloud.ros2_frame_receiver import serve
+        from cable_pointcloud import inference as remote_cable_pc
+        from cable_pointcloud.rgbd_receiver import serve
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

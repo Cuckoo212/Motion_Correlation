@@ -1,0 +1,31 @@
+FROM ros:humble-ros-base-jammy
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-numpy ros-humble-rmw-fastrtps-cpp python3-venv python3-colcon-common-extensions python3-opencv python3-matplotlib libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g 1000 flexcycle && useradd -m -u 1000 -g 1000 flexcycle
+
+# Keep ROS system Python separate from the SAM3 environment.
+RUN python3 -m venv --system-site-packages /opt/sam3-env
+RUN /opt/sam3-env/bin/python -m pip install --upgrade pip wheel \
+    && /opt/sam3-env/bin/python -m pip install 'setuptools<81' \
+    && /opt/sam3-env/bin/python -m pip install torch==2.7.0 torchvision==0.22.0 \
+       --index-url https://download.pytorch.org/whl/cu128
+
+COPY sam3_project /workspace/cmcor/pointcloud/sam3_project
+COPY requirements-realtime.txt /workspace/cmcor/pointcloud/requirements-realtime.txt
+WORKDIR /workspace/cmcor/pointcloud
+RUN /opt/sam3-env/bin/python -m pip install -r requirements-realtime.txt \
+    && /opt/sam3-env/bin/python -c 'import sam3, torch, cv2, pyrealsense2; print(torch.__version__)'
+
+ENV PATH="/opt/sam3-env/bin:${PATH}"
+COPY . /opt/cable_ws/src/cable_pointcloud
+WORKDIR /opt/cable_ws
+RUN /bin/bash -c 'source /opt/ros/humble/setup.bash && /usr/bin/python3 -m colcon build --packages-select cable_pointcloud'
+RUN /bin/bash -c 'source /opt/ros/humble/setup.bash && /opt/sam3-env/bin/python -c "import rclpy, sam3; from sensor_msgs.msg import PointCloud2"'
+COPY docker/ros-entrypoint.sh /cable-entrypoint.sh
+RUN chmod +x /cable-entrypoint.sh
+ENTRYPOINT ["/cable-entrypoint.sh"]
+WORKDIR /workspace/cmcor
+CMD ["ros2", "launch", "cable_pointcloud", "gpu_pc.launch.py"]

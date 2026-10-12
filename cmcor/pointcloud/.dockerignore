@@ -1,0 +1,4 @@
+sam3_project/checkpoints
+**/__pycache__
+docker/runtime
+*.pt

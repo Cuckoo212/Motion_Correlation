@@ -1,0 +1,21 @@
+services:
+  gpu:
+    image: cable-pointcloud-humble:local
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.sam3
+    gpus: all
+    network_mode: host
+    ipc: host
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment:
+      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-42}"
+      ROS_LOCALHOST_ONLY: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      HOME: /tmp
+      MPLBACKEND: Agg
+    volumes:
+      - ../..:/workspace/cmcor
+      - ./runtime:/run/cable-rgbd
+    command: ["ros2", "launch", "cable_pointcloud", "gpu_pc.launch.py"]
+    stop_grace_period: 30s

@@ -1,20 +1,8 @@
 """Shared recording and visualization utilities; no camera or SAM3 dependency."""
 from __future__ import annotations
 import json
-import queue
-import threading
-from dataclasses import dataclass
 from pathlib import Path
-import cv2
 import numpy as np
-
-@dataclass(frozen=True)
-class Frame:
-    index: int
-    timestamp_ns: int
-    rgb_bgr: np.ndarray
-    depth_mm: np.ndarray
-
 
 def atomic_json(path: Path, value: object) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
@@ -22,43 +10,6 @@ def atomic_json(path: Path, value: object) -> None:
         json.dump(value, stream, indent=2, sort_keys=True)
         stream.write("\n")
     temporary.replace(path)
-
-
-class FrameRecorder(threading.Thread):
-    def __init__(
-        self,
-        sequence_dir: Path,
-        frame_queue: "queue.Queue[Frame | None]",
-    ) -> None:
-        super().__init__(name="rgbd-recorder", daemon=False)
-        self.sequence_dir = sequence_dir
-        self.frame_queue = frame_queue
-        self.error: Exception | None = None
-        self.frame_metadata: list[dict] = []
-
-    def run(self) -> None:
-        try:
-            while True:
-                frame = self.frame_queue.get()
-                if frame is None:
-                    return
-                stem = f"{frame.index:08d}"
-                rgb_path = self.sequence_dir / f"rgb_{stem}.png"
-                depth_path = self.sequence_dir / f"depth_{stem}.png"
-                if not cv2.imwrite(str(rgb_path), frame.rgb_bgr):
-                    raise OSError(f"Failed to save {rgb_path}")
-                if not cv2.imwrite(str(depth_path), frame.depth_mm):
-                    raise OSError(f"Failed to save {depth_path}")
-                self.frame_metadata.append(
-                    {
-                        "frame_index": frame.index,
-                        "timestamp_ns": frame.timestamp_ns,
-                        "rgb": rgb_path.name,
-                        "depth": depth_path.name,
-                    }
-                )
-        except Exception as exc:  # noqa: BLE001
-            self.error = exc
 
 
 class MatplotlibViewer:

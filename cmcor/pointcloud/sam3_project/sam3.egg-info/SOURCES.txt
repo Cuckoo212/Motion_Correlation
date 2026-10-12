@@ -50,10 +50,6 @@ sam3/eval/hota_eval_toolkit/trackeval/__init__.py
 sam3/eval/hota_eval_toolkit/trackeval/_timing.py
 sam3/eval/hota_eval_toolkit/trackeval/eval.py
 sam3/eval/hota_eval_toolkit/trackeval/utils.py
-sam3/eval/hota_eval_toolkit/trackeval/datasets/__init__.py
-sam3/eval/hota_eval_toolkit/trackeval/datasets/_base_dataset.py
-sam3/eval/hota_eval_toolkit/trackeval/datasets/tao_ow.py
-sam3/eval/hota_eval_toolkit/trackeval/datasets/youtube_vis.py
 sam3/eval/hota_eval_toolkit/trackeval/metrics/__init__.py
 sam3/eval/hota_eval_toolkit/trackeval/metrics/_base_metric.py
 sam3/eval/hota_eval_toolkit/trackeval/metrics/count.py
@@ -63,10 +59,6 @@ sam3/eval/teta_eval_toolkit/_timing.py
 sam3/eval/teta_eval_toolkit/config.py
 sam3/eval/teta_eval_toolkit/eval.py
 sam3/eval/teta_eval_toolkit/utils.py
-sam3/eval/teta_eval_toolkit/datasets/__init__.py
-sam3/eval/teta_eval_toolkit/datasets/_base_dataset.py
-sam3/eval/teta_eval_toolkit/datasets/coco.py
-sam3/eval/teta_eval_toolkit/datasets/tao.py
 sam3/eval/teta_eval_toolkit/metrics/__init__.py
 sam3/eval/teta_eval_toolkit/metrics/_base_metric.py
 sam3/eval/teta_eval_toolkit/metrics/teta.py
@@ -122,12 +114,6 @@ sam3/train/matcher.py
 sam3/train/nms_helper.py
 sam3/train/train.py
 sam3/train/trainer.py
-sam3/train/data/__init__.py
-sam3/train/data/coco_json_loaders.py
-sam3/train/data/collator.py
-sam3/train/data/sam3_image_dataset.py
-sam3/train/data/sam3_video_dataset.py
-sam3/train/data/torch_dataset.py
 sam3/train/loss/__init__.py
 sam3/train/loss/loss_fns.py
 sam3/train/loss/mask_sampling.py
