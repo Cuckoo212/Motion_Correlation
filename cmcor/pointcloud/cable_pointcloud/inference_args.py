@@ -11,7 +11,7 @@ def parse_args():
     parser.add_argument('--dataset-root', type=Path, default=root/'datasets/realtime_cable_pc')
     parser.add_argument('--output-root', type=Path, default=root/'output/realtime_cable_pc')
     parser.add_argument('--sequence-name')
-    parser.add_argument('--socket-path', type=Path, default=Path('/run/cable-rgbd/cable_rgbd.sock'))
+    parser.add_argument('--topic-prefix', default='/cable_camera')
     parser.add_argument('--receive-timeout', type=float, default=60.)
     parser.add_argument('--prompt', default='cable')
     parser.add_argument('--confidence-threshold', type=float, default=.5)

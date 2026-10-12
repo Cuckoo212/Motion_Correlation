@@ -1,48 +1,22 @@
 """Transport correctness without ROS, a camera, or CUDA."""
-import socket
 import threading
 import unittest
 from types import SimpleNamespace
 import numpy as np
 from cable_pointcloud.rgbd_transport import (FramePairer, LatestFrame, decode_image,
-                                      send_frame, receive_frame)
+                                      )
 
 
 class TransportTests(unittest.TestCase):
-    def test_socket_roundtrip_and_latest_request(self):
-        from cable_pointcloud.rgbd_receiver import serve
-        import tempfile
-        from pathlib import Path
-        with tempfile.TemporaryDirectory() as directory:
-            path = str(Path(directory) / 'frames.sock')
-            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            listener.bind(path)
-            listener.listen(1)
-            latest, stop = LatestFrame(), threading.Event()
-            rgb = np.arange(18, dtype=np.uint8).reshape(2, 3, 3)
-            depth = np.array([[0, 1, 65535], [200, 400, 800]], np.uint16)
-            latest.put(({'timestamp_ns': 1}, rgb, depth))
-            latest.put(({'timestamp_ns': 2}, rgb, depth))
-            thread = threading.Thread(target=serve, args=(listener, latest, stop))
-            thread.start()
-            try:
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-                    client.settimeout(2)
-                    client.connect(path)
-                    client.sendall(b'N')
-                    metadata, actual_rgb, actual_depth = receive_frame(client)
-                    self.assertEqual(metadata['timestamp_ns'], 2)
-                    np.testing.assert_array_equal(rgb, actual_rgb)
-                    np.testing.assert_array_equal(depth, actual_depth)
-                    latest.put(({'timestamp_ns': 3}, rgb, depth))
-                    latest.put(({'timestamp_ns': 4}, rgb, depth))
-                    client.sendall(b'N')
-                    self.assertEqual(receive_frame(client)[0]['timestamp_ns'], 4)
-            finally:
-                stop.set()
-                thread.join(2)
-                listener.close()
-            self.assertFalse(thread.is_alive())
+    def test_latest_frame_timeout_and_stop(self):
+        latest, stop = LatestFrame(), threading.Event()
+        with self.assertRaises(TimeoutError):
+            latest.get_after(0, stop, .01)
+        latest.put('old')
+        latest.put('new')
+        self.assertEqual(latest.get_after(0, stop, .01), (2, 'new'))
+        stop.set()
+        self.assertIsNone(latest.get_after(2, stop, .01))
 
     def test_remote_output_same_frame(self):
         import json
@@ -50,13 +24,8 @@ class TransportTests(unittest.TestCase):
         from pathlib import Path
         from unittest.mock import patch
         from cable_pointcloud import inference as remote_cable_pc
-        from cable_pointcloud.rgbd_receiver import serve
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            path = str(root / 'remote.sock')
-            listener.bind(path)
-            listener.listen(1)
             latest, stop = LatestFrame(), threading.Event()
             rgb = np.full((2, 3, 3), 50, np.uint8)
             depth = np.full((2, 3), 1000, np.uint16)
@@ -64,17 +33,15 @@ class TransportTests(unittest.TestCase):
                             received_pair_index=7, frame_id='camera',
                             camera_info={'camera_matrix': [[100, 0, 1], [0, 100, 1], [0, 0, 1]]})
             latest.put((metadata, rgb, depth))
-            thread = threading.Thread(target=serve, args=(listener, latest, stop))
-            thread.start()
             handler = __import__('signal').getsignal(__import__('signal').SIGINT)
             term_handler = __import__('signal').getsignal(__import__('signal').SIGTERM)
             try:
-                argv = ['remote', '--socket-path', path, '--dataset-root', str(root / 'data'),
+                argv = ['remote', '--dataset-root', str(root / 'data'),
                         '--output-root', str(root / 'output'), '--sequence-name', 'test',
                         '--no-view', '--max-frames', '1']
                 with patch('sys.argv', argv), patch.object(remote_cable_pc, 'Sam3CableSegmenter') as segmenter:
                     segmenter.return_value.segment.return_value = (np.full((2, 3), 255, np.uint8), .9)
-                    remote_cable_pc.main()
+                    remote_cable_pc.main(latest)
                     np.testing.assert_array_equal(segmenter.return_value.segment.call_args.args[0], rgb)
                 data = root / 'data' / 'test'
                 metadata = json.loads((data / 'frames.json').read_text())
@@ -88,8 +55,6 @@ class TransportTests(unittest.TestCase):
                 signal.signal(signal.SIGINT, handler)
                 signal.signal(signal.SIGTERM, term_handler)
                 stop.set()
-                thread.join(2)
-                listener.close()
 
     def test_pairing_reordering_and_bounds(self):
         pairer = FramePairer(capacity=2)
@@ -115,16 +80,6 @@ class TransportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             decode_image(message, '16UC1')
 
-    def test_truncated_packet(self):
-        left, right = socket.socketpair()
-        try:
-            left.sendall(b'\x00\x00')
-            left.close()
-            with self.assertRaises(EOFError):
-                receive_frame(right)
-        finally:
-            left.close()
-            right.close()
 
 
 if __name__ == '__main__':

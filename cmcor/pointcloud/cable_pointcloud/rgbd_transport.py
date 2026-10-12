@@ -1,51 +1,10 @@
-"""Bounded RGB-D pairing and a local, request-driven Unix socket protocol.
-
-Wire format: uint32 network-endian JSON length, JSON, then BGR8 and LE uint16.
-Only trusted local processes should connect. No pickle or remote socket listener.
-"""
+"""Bounded in-memory RGB-D pairing and latest-frame cache."""
 from __future__ import annotations
-import json
-import socket
-import struct
 import threading
+import time
 import numpy as np
 
-MAX_HEADER = 65536
 MAX_PIXELS = 4096 * 4096
-
-
-def recv_exact(connection, size):
-    chunks = bytearray()
-    while len(chunks) < size:
-        part = connection.recv(size - len(chunks))
-        if not part:
-            raise EOFError('RGB-D receiver disconnected')
-        chunks.extend(part)
-    return bytes(chunks)
-
-
-def send_frame(connection, metadata, rgb, depth):
-    height, width = depth.shape
-    header = dict(metadata, width=width, height=height, protocol_version=1)
-    encoded = json.dumps(header).encode('utf-8')
-    if len(encoded) > MAX_HEADER:
-        raise ValueError('RGB-D metadata too large')
-    connection.sendall(struct.pack('!I', len(encoded)) + encoded)
-    connection.sendall(np.ascontiguousarray(rgb, dtype=np.uint8).tobytes())
-    connection.sendall(np.ascontiguousarray(depth, dtype='<u2').tobytes())
-
-
-def receive_frame(connection):
-    length = struct.unpack('!I', recv_exact(connection, 4))[0]
-    if not 0 < length <= MAX_HEADER:
-        raise ValueError('Invalid RGB-D header size')
-    metadata = json.loads(recv_exact(connection, length))
-    width, height = int(metadata['width']), int(metadata['height'])
-    if metadata.get('protocol_version') != 1 or min(width, height) <= 0 or width * height > MAX_PIXELS:
-        raise ValueError('Invalid RGB-D dimensions or version')
-    rgb = np.frombuffer(recv_exact(connection, width * height * 3), np.uint8).reshape(height, width, 3).copy()
-    depth = np.frombuffer(recv_exact(connection, width * height * 2), '<u2').reshape(height, width).copy()
-    return metadata, rgb, depth
 
 
 def decode_image(message, encoding):
@@ -103,10 +62,14 @@ class LatestFrame:
             self.version += 1
             self.condition.notify_all()
 
-    def get_after(self, version, stop):
+    def get_after(self, version, stop, timeout=None):
+        deadline = None if timeout is None else time.monotonic() + timeout
         with self.condition:
             while self.version <= version and not stop.is_set():
-                self.condition.wait(0.2)
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    raise TimeoutError("No fresh paired RGB-D frame")
+                self.condition.wait(.2 if remaining is None else min(.2, remaining))
             if stop.is_set():
                 return None
             return self.version, self.frame

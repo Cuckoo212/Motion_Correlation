@@ -16,8 +16,6 @@ fi
 sudo nvidia-ctk runtime configure --runtime=docker
 # Restarting Docker may interrupt running containers. Run while capture is stopped.
 sudo systemctl restart docker
-mkdir -p runtime
-chmod 700 runtime
 export LOCAL_UID=$(id -u)
 export LOCAL_GID=$(id -g)
 sudo --preserve-env=LOCAL_UID,LOCAL_GID docker compose build gpu

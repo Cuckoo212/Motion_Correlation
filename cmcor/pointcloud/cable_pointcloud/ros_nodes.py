@@ -51,19 +51,42 @@ def inference_main():
     rclpy.init(args=sys.argv)
     node = rclpy.create_node('sam3_pointcloud')
     pub = node.create_publisher(PointCloud2, '/cable_pointcloud/internal', qos_profile_sensor_data)
-    thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
-    thread.start()
+    stop_event = threading.Event()
+    thread = None
     original = sys.argv
     try:
         from .inference import main
+        from .inference_args import parse_args
+        from .ros_rgbd_input import RosRgbdInput
+        from rclpy.executors import SingleThreadedExecutor, ExternalShutdownException
         sys.argv = argv
-        node.get_logger().info('SAM3 ROS node started; publishing computed clouds')
-        main(on_cloud=lambda metadata, points, colors: pub.publish(cloud_message(metadata, points, colors)))
+        args = parse_args()
+        source = RosRgbdInput(node, args.topic_prefix)
+        executor = SingleThreadedExecutor()
+        executor.add_node(node)
+        def receive():
+            try:
+                while rclpy.ok() and not stop_event.is_set():
+                    executor.spin_once(timeout_sec=.1)
+            except ExternalShutdownException:
+                pass
+            except Exception as exc:
+                node.get_logger().error(f'RGB-D subscription thread failed: {exc}')
+            finally:
+                stop_event.set()
+        thread = threading.Thread(target=receive, name='rgbd-subscriptions', daemon=True)
+        thread.start()
+        node.get_logger().info('Direct RGB-D subscriptions active; SAM3 consumes latest paired frame in memory')
+        main(source, on_cloud=lambda metadata, points, colors: pub.publish(cloud_message(metadata, points, colors)),
+             stop_event=stop_event)
     finally:
         sys.argv = original
+        stop_event.set()
+        if thread is not None:
+            thread.join(2)
+            executor.shutdown()
         if rclpy.ok():
             rclpy.shutdown()
-        thread.join(2)
         node.destroy_node()
 
 

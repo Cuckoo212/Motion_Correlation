@@ -11,7 +11,6 @@ setup(name='cable_pointcloud', version='0.1.0',
       description='ROS 2 cable point-cloud pipeline', license='MIT',
       entry_points={'console_scripts': [
           'rgbd_capture_publisher = cable_pointcloud.rgbd_capture_publisher:main',
-          'rgbd_receiver = cable_pointcloud.rgbd_receiver:main',
           'sam3_pointcloud = cable_pointcloud.ros_nodes:inference_main',
           'pointcloud_publisher = cable_pointcloud.ros_nodes:publisher_main',
           'pointcloud_viewer = cable_pointcloud.ros_nodes:viewer_main']})

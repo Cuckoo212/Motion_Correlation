@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Run SAM3 on remote RGB-D received by the separate ROS 2 process."""
+"""Compute and record clouds from the inference node's in-memory RGB-D input."""
 from __future__ import annotations
 import signal
-import socket
+import threading
 import time
 from datetime import datetime
 import cv2
 import numpy as np
 from .geometry import depth_mask_to_points, voxel_downsample, save_ply
 from .runtime import MatplotlibViewer, atomic_json
-from .rgbd_transport import receive_frame
 from .sam3_segmenter import Sam3CableSegmenter
 from .inference_args import parse_args
 
@@ -42,7 +41,7 @@ def print_rates(summary, *, final=False):
           f"skipped={summary['skipped_pairs']} (run average)", flush=True)
 
 
-def main(on_cloud=None):
+def main(source, on_cloud=None, stop_event=None):
     args = parse_args()
     if args.receive_timeout <= 0:
         raise ValueError('receive-timeout must be positive')
@@ -57,35 +56,25 @@ def main(on_cloud=None):
         max_area_ratio=args.max_area_ratio, selection=args.selection)
     viewer = MatplotlibViewer(not args.no_view, width=args.view_width, height=args.view_height,
                               point_size=args.point_size, use_rgb=args.view_rgb)
-    stopping = False
-    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    connection.settimeout(args.receive_timeout)
+    stop_event = stop_event or threading.Event()
     def stop(*_):
-        nonlocal stopping
-        stopping = True
-        connection.close()  # Interrupt a blocked receive immediately.
-    signal.signal(signal.SIGINT, stop)
-    signal.signal(signal.SIGTERM, stop)
+        stop_event.set()
+    previous_int = signal.signal(signal.SIGINT, stop)
+    previous_term = signal.signal(signal.SIGTERM, stop)
+    version = 0
     frames, results = [], []
     created = False
     next_rate_log = time.monotonic() + 5.
     try:
-        deadline = time.monotonic() + args.receive_timeout
-        while not stopping:
-            try:
-                connection.connect(str(args.socket_path.expanduser()))
-                break
-            except (FileNotFoundError, ConnectionRefusedError):
-                if time.monotonic() >= deadline:
-                    raise
-                time.sleep(.1)
         dataset.mkdir(parents=True)
         output.mkdir(parents=True)
         created = True
         print(f'Dataset: {dataset}\nPoint clouds: {output}')
-        while not stopping:
-            connection.sendall(b'N')
-            metadata, rgb, depth = receive_frame(connection)
+        while not stop_event.is_set():
+            frame = source.get_after(version, stop_event, args.receive_timeout)
+            if frame is None:
+                break
+            version, (metadata, rgb, depth) = frame
             started = time.perf_counter()
             source_age_ms = (time.time_ns() - metadata['timestamp_ns']) / 1e6
             camera = metadata['camera_info']
@@ -124,10 +113,11 @@ def main(on_cloud=None):
             if not view_open or (args.max_frames and len(frames) >= args.max_frames):
                 break
     except (OSError, EOFError) as exc:
-        if not stopping:
-            raise RuntimeError('RGB-D connection failed or timed out; check receiver/publisher, then restart with a new sequence name') from exc
+        if not stop_event.is_set():
+            raise RuntimeError('RGB-D input failed or timed out; check Mini PC publisher, then restart with a new sequence name') from exc
     finally:
-        connection.close()
+        signal.signal(signal.SIGINT, previous_int)
+        signal.signal(signal.SIGTERM, previous_term)
         viewer.close()
         if created:
             rates = rate_summary(frames, results)

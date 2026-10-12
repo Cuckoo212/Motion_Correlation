@@ -5,11 +5,13 @@ import argparse
 import json
 import signal
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 import cv2
 import numpy as np
 from .runtime import atomic_json
+from .throughput import Throughput
 
 
 def crop_geometry(width, height, matrix, crop):
@@ -58,6 +60,18 @@ def main():
     depth_pub = node.create_publisher(Image, prefix + '/aligned_depth/image_raw', image_qos)
     info_pub = node.create_publisher(CameraInfo, prefix + '/color/camera_info', info_qos)
     metadata_pub = node.create_publisher(String, prefix + '/metadata', info_qos)
+    stats_pub = node.create_publisher(String, prefix + '/transport_stats', info_qos)
+    throughput = Throughput(('captured', 'published'))
+    session_id = uuid.uuid4().hex
+    def report(final=False):
+        stats = dict(throughput.snapshot(), session_id=session_id, final=final,
+                     capture_config_hz=args.fps, publish_config_hz=args.publish_fps)
+        stats_pub.publish(String(data=json.dumps(stats)))
+        node.get_logger().info(
+            f"[source{' final' if final else ''}] capture={stats['hz']['captured']:.2f}Hz "
+            f"publish={stats['hz']['published']:.2f}Hz "
+            f"captured_total={stats['counts']['captured']} published_total={stats['counts']['published']} "
+            f"window={stats['window_seconds']:.2f}s")
     pipeline, config = rs.pipeline(), rs.config()
     if args.serial:
         config.enable_device(args.serial)
@@ -110,6 +124,7 @@ def main():
         info_pub.publish(info)
         next_publish = 0.
         index = 0
+        next_report = time.monotonic() + 5.
         node.get_logger().info(f'Publishing aligned millimetre RGB-D at {args.publish_fps} Hz on {prefix}; crop=({left}, {top}, {width}, {height}), output={width}x{height}')
         while rclpy.ok() and not stopping:
             rclpy.spin_once(node, timeout_sec=0)
@@ -117,6 +132,7 @@ def main():
             color, depth = frames.get_color_frame(), frames.get_depth_frame()
             if not color or not depth:
                 continue
+            throughput.add('captured')
             timestamp = time.time_ns()
             rgb = np.asanyarray(color.get_data()).copy()
             depth_mm = np.clip(np.asanyarray(depth.get_data()).astype(np.float64) * scale * 1000., 0, 65535).astype(np.uint16)
@@ -145,11 +161,17 @@ def main():
                     message.is_bigendian = 0
                     message.data = array.tobytes()
                     publisher.publish(message)
+                throughput.add('published')
                 next_publish = now + 1. / args.publish_fps
             index += 1
+            if time.monotonic() >= next_report:
+                report()
+                next_report = time.monotonic() + 5.
             if args.max_frames and index >= args.max_frames:
                 break
     finally:
+        if started and rclpy.ok():
+            report(final=True)
         if started:
             pipeline.stop()
         if record_dir:

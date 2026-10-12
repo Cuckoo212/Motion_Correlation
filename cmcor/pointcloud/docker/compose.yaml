@@ -16,6 +16,5 @@ services:
       MPLBACKEND: Agg
     volumes:
       - ../..:/workspace/cmcor
-      - ./runtime:/run/cable-rgbd
     command: ["ros2", "launch", "cable_pointcloud", "gpu_pc.launch.py"]
     stop_grace_period: 30s
