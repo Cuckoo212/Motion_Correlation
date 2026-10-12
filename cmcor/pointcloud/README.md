@@ -97,15 +97,19 @@ bash build-sam3.sh
 ```bash
 sudo apt install python3-colcon-common-extensions python3-opencv python3-matplotlib
 source /opt/ros/humble/setup.bash
-mkdir -p ~/cable_ws/src
-ln -s /home/flexcycle/Motion_Correlation/cmcor/pointcloud ~/cable_ws/src/cable_pointcloud
-cd ~/cable_ws
-colcon build --packages-select cable_pointcloud
+cd /home/flexcycle/Motion_Correlation/cmcor
+colcon build --base-paths pointcloud --packages-select cable_pointcloud
 source install/setup.bash
 /usr/bin/python3 -c 'import pyrealsense2'
 ```
 
-软链接已存在时跳过 ln 命令。不要加载旧包的安装环境。
+直接使用仓库内的 `cmcor` 作为工作空间，无需 `cable_ws` 或源码软链接。
+构建生成 `cmcor/build/`、`cmcor/install/`、`cmcor/log/`，已有 Git 忽略规则覆盖这些目录。
+不要加载旧工作空间的安装环境；如 shell 启动文件中曾添加旧 setup.bash，请删除对应行并新开终端。
+
+GPU 镜像也使用 `cmcor` 工作空间，位于 `/opt/cmcor`，入口加载
+`/opt/cmcor/install/setup.bash`。运行时 `/workspace/cmcor` 挂载宿主机项目及数据；
+安装结果单独放在 `/opt/cmcor`，避免宿主机挂载覆盖镜像内已构建的 ROS 包。
 
 ## 5. 启动
 
@@ -119,7 +123,7 @@ source ~/cable_ws/install/setup.bash
 export ROS_DOMAIN_ID=42
 export ROS_LOCALHOST_ONLY=0
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-ros2 launch cable_pointcloud mini_pc.launch.py publish_fps:=10
+ros2 launch cable_pointcloud mini_pc.launch.py publish_fps:=30 --width 640 --height 480  --crop 100 140 400 300
 ```
 
 相机采集 30 Hz；publish_fps 可设为 5、10 或 30 Hz。配置值不保证实际频率。
@@ -136,7 +140,8 @@ sudo docker compose build gpu
 # 使用镜像创建并进入容器
 sudo docker compose run --rm --no-deps gpu bash
 ```
-创建容器时，镜像配置的入口脚本 ros-entrypoint.sh 会先执行source humble和source cable_ws,所以不需要手动source。现在已进入容器，以下命令在容器内执行。入口脚本已自动加载 Humble 和 ROS 包：
+创建容器时，入口脚本 `ros-entrypoint.sh` 自动加载 Humble 和
+`/opt/cmcor/install/setup.bash`，无需手动 source。以下命令在容器内执行：
 
 ```bash
 ros2 pkg executables cable_pointcloud
