@@ -119,11 +119,14 @@ GPU 镜像也使用 `cmcor` 工作空间，位于 `/opt/cmcor`，入口加载
 
 ```bash
 source /opt/ros/humble/setup.bash
-source ~/cable_ws/install/setup.bash
+source /home/flexcycle/Motion_Correlation/cmcor/install/setup.bash
 export ROS_DOMAIN_ID=42
 export ROS_LOCALHOST_ONLY=0
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-ros2 launch cable_pointcloud mini_pc.launch.py publish_fps:=30 --width 640 --height 480  --crop 100 140 400 300
+ros2 launch cable_pointcloud mini_pc.launch.py \
+  publish_fps:=30 \
+  crop_left:=100 crop_top:=140 \
+  crop_width:=400 crop_height:=300
 ```
 
 相机采集 30 Hz；publish_fps 可设为 5、10 或 30 Hz。配置值不保证实际频率。

@@ -12,10 +12,22 @@ import numpy as np
 from .runtime import atomic_json
 
 
+def crop_geometry(width, height, matrix, crop):
+    """Validate ROI and preserve the original camera coordinate system."""
+    left, top, w, h = crop if crop is not None else (0, 0, width, height)
+    if min(left, top) < 0 or min(w, h) <= 0 or left + w > width or top + h > height:
+        raise ValueError('crop must fit within captured image with nonnegative origin and positive size')
+    adjusted = np.asarray(matrix, dtype=np.float64).copy()
+    adjusted[0, 2] -= left
+    adjusted[1, 2] -= top
+    return (left, top, w, h), adjusted.tolist()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--width', type=int, default=640)
     parser.add_argument('--height', type=int, default=480)
+    parser.add_argument('--crop', type=int, nargs=4, metavar=('LEFT', 'TOP', 'WIDTH', 'HEIGHT'))
     parser.add_argument('--fps', type=int, default=30)
     parser.add_argument('--publish-fps', type=float, default=5)
     parser.add_argument('--serial')
@@ -27,6 +39,10 @@ def main():
     args, ros_args = parser.parse_known_args()
     if min(args.width, args.height, args.fps, args.publish_fps) <= 0 or args.publish_fps > args.fps:
         parser.error('Positive dimensions/rates required; publish-fps must not exceed fps')
+    try:
+        crop_geometry(args.width, args.height, np.eye(3), args.crop)
+    except ValueError as exc:
+        parser.error(str(exc))
     import pyrealsense2 as rs
     import rclpy
     from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
@@ -63,8 +79,11 @@ def main():
         scale = float(profile.get_device().first_depth_sensor().get_depth_scale())
         intr = profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
         matrix = [[intr.fx, 0., intr.ppx], [0., intr.fy, intr.ppy], [0., 0., 1.]]
+        (left, top, width, height), matrix = crop_geometry(intr.width, intr.height, matrix, args.crop)
+        cx, cy = matrix[0][2], matrix[1][2]
         metadata = dict(camera_matrix=matrix, distortion_coefficients=list(intr.coeffs),
-                        distortion_model=str(intr.model), width=intr.width, height=intr.height,
+                        distortion_model=str(intr.model), width=width, height=height,
+                        source_width=intr.width, source_height=intr.height, crop=[left, top, width, height],
                         fps=args.fps, publish_fps=args.publish_fps, depth_scale_m=scale,
                         depth_unit='millimetre in saved PNG', color_aligned_depth=True,
                         timestamp_source='Mini PC host Unix time immediately after frame acquisition',
@@ -75,7 +94,7 @@ def main():
             atomic_json(record_dir / 'camera_info.json', metadata)
         info = CameraInfo()
         info.header.frame_id = args.frame_id
-        info.width, info.height = intr.width, intr.height
+        info.width, info.height = width, height
         # Preserve the SDK model exactly in /metadata. ROS model mapping is explicit.
         if intr.model in (rs.distortion.none, rs.distortion.brown_conrady, rs.distortion.modified_brown_conrady):
             info.distortion_model = 'plumb_bob'
@@ -86,12 +105,12 @@ def main():
             node.get_logger().warning('SDK distortion model is in /metadata; no ROS distortion mapping provided')
         info.k = np.asarray(matrix).ravel().tolist()
         info.r = np.eye(3).ravel().tolist()
-        info.p = [intr.fx, 0., intr.ppx, 0., 0., intr.fy, intr.ppy, 0., 0., 0., 1., 0.]
+        info.p = [intr.fx, 0., cx, 0., 0., intr.fy, cy, 0., 0., 0., 1., 0.]
         metadata_pub.publish(String(data=json.dumps(metadata)))
         info_pub.publish(info)
         next_publish = 0.
         index = 0
-        node.get_logger().info(f'Publishing aligned millimetre RGB-D at {args.publish_fps} Hz on {prefix}')
+        node.get_logger().info(f'Publishing aligned millimetre RGB-D at {args.publish_fps} Hz on {prefix}; crop=({left}, {top}, {width}, {height}), output={width}x{height}')
         while rclpy.ok() and not stopping:
             rclpy.spin_once(node, timeout_sec=0)
             frames = align.process(pipeline.wait_for_frames(timeout_ms=1000))
@@ -101,6 +120,8 @@ def main():
             timestamp = time.time_ns()
             rgb = np.asanyarray(color.get_data()).copy()
             depth_mm = np.clip(np.asanyarray(depth.get_data()).astype(np.float64) * scale * 1000., 0, 65535).astype(np.uint16)
+            rgb = np.ascontiguousarray(rgb[top:top + height, left:left + width])
+            depth_mm = np.ascontiguousarray(depth_mm[top:top + height, left:left + width])
             if record_dir:
                 stem = f'{index:08d}'
                 for name, array in ((f'rgb_{stem}.png', rgb), (f'depth_{stem}.png', depth_mm)):
@@ -113,13 +134,13 @@ def main():
             now = time.monotonic()
             if now >= next_publish:
                 for publisher, array, encoding, step in (
-                    (rgb_pub, rgb, 'bgr8', intr.width * 3),
-                    (depth_pub, depth_mm.astype('<u2'), '16UC1', intr.width * 2)):
+                    (rgb_pub, rgb, 'bgr8', width * 3),
+                    (depth_pub, depth_mm.astype('<u2'), '16UC1', width * 2)):
                     message = Image()
                     message.header.frame_id = args.frame_id
                     message.header.stamp.sec = timestamp // 1_000_000_000
                     message.header.stamp.nanosec = timestamp % 1_000_000_000
-                    message.width, message.height = intr.width, intr.height
+                    message.width, message.height = width, height
                     message.encoding, message.step = encoding, step
                     message.is_bigendian = 0
                     message.data = array.tobytes()
