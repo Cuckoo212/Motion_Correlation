@@ -3,6 +3,12 @@ import argparse
 from pathlib import Path
 
 
+def boolean(value):
+    if value.lower() not in ('true', 'false'):
+        raise argparse.ArgumentTypeError('Expected true or false')
+    return value.lower() == 'true'
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     root = Path('/workspace/cmcor')
@@ -11,6 +17,8 @@ def parse_args():
     parser.add_argument('--dataset-root', type=Path, default=root/'datasets/realtime_cable_pc')
     parser.add_argument('--output-root', type=Path, default=root/'output/realtime_cable_pc')
     parser.add_argument('--sequence-name')
+    parser.add_argument('--record', nargs='?', const=True, default=False, type=boolean,
+                        help='Save RGB/depth/mask, PLY and JSON; disabled by default')
     parser.add_argument('--topic-prefix', default='/cable_camera')
     parser.add_argument('--receive-timeout', type=float, default=60.)
     parser.add_argument('--prompt', default='cable')

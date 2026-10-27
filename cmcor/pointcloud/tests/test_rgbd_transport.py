@@ -38,7 +38,7 @@ class TransportTests(unittest.TestCase):
             try:
                 argv = ['remote', '--dataset-root', str(root / 'data'),
                         '--output-root', str(root / 'output'), '--sequence-name', 'test',
-                        '--no-view', '--max-frames', '1']
+                        '--record', '--no-view', '--max-frames', '1']
                 with patch('sys.argv', argv), patch.object(remote_cable_pc, 'Sam3CableSegmenter') as segmenter:
                     segmenter.return_value.segment.return_value = (np.full((2, 3), 255, np.uint8), .9)
                     remote_cable_pc.main(latest)

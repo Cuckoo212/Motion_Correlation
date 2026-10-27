@@ -3,7 +3,7 @@ import sys
 import threading
 import numpy as np
 import rclpy
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import PointCloud2, PointField
 
 
@@ -95,9 +95,17 @@ def publisher_main():
     node = rclpy.create_node('pointcloud_publisher')
     node.declare_parameter('input_topic', '/cable_pointcloud/internal')
     node.declare_parameter('output_topic', '/cable_camera/cable_points')
-    pub = node.create_publisher(PointCloud2, node.get_parameter('output_topic').value, qos_profile_sensor_data)
+    node.declare_parameter('output_reliability', 'reliable')
+    reliability = node.get_parameter('output_reliability').value
+    if reliability not in ('reliable', 'best_effort'):
+        node.destroy_node()
+        rclpy.shutdown()
+        raise ValueError('output_reliability must be reliable or best_effort')
+    output_qos = QoSProfile(depth=5, reliability=(ReliabilityPolicy.RELIABLE
+        if reliability == 'reliable' else ReliabilityPolicy.BEST_EFFORT))
+    pub = node.create_publisher(PointCloud2, node.get_parameter('output_topic').value, output_qos)
     node.create_subscription(PointCloud2, node.get_parameter('input_topic').value, pub.publish, qos_profile_sensor_data)
-    node.get_logger().info('Publishing cable PointCloud2 to Mini PC')
+    node.get_logger().info(f'Publishing cable PointCloud2 to Mini PC: reliability={reliability}')
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

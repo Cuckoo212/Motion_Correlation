@@ -13,20 +13,37 @@ from .sam3_segmenter import Sam3CableSegmenter
 from .inference_args import parse_args
 
 
-def rate_summary(frames, results):
-    """Whole-run rates; receiving rate includes pairs skipped by inference."""
-    if not frames:
-        return {}
-    first, last = frames[0], frames[-1]
-    receive_seconds = (last['received_timestamp_ns'] - first['received_timestamp_ns']) / 1e9
-    completion_seconds = results[-1]['completed_monotonic_s'] - results[0]['completed_monotonic_s']
-    pairs = last['received_pair_index'] - first['received_pair_index']
-    return dict(capture_config_hz=first['camera_info'].get('fps'),
-                publish_config_hz=first['camera_info'].get('publish_fps'),
-                receiver_hz=pairs / receive_seconds if receive_seconds > 0 else None,
-                cloud_hz=(len(results) - 1) / completion_seconds if completion_seconds > 0 else None,
-                mean_sam_inference_ms=float(np.mean([r['sam_inference_ms'] for r in results])),
-                skipped_pairs=max(0, pairs + 1 - len(frames)))
+class RunStats:
+    """Constant-memory cumulative statistics, independent of recording."""
+    def __init__(self):
+        self.count = 0
+        self.sam_ms = self.age_ms = 0.
+        self.first_frame = self.last_frame = None
+        self.first_done = self.last_done = None
+
+    def add(self, frame, result):
+        if not self.count:
+            self.first_frame = frame
+            self.first_done = result['completed_monotonic_s']
+        self.last_frame = frame
+        self.last_done = result['completed_monotonic_s']
+        self.count += 1
+        self.sam_ms += result['sam_inference_ms']
+        self.age_ms += result['result_age_ms']
+
+    def summary(self):
+        if not self.count:
+            return {}
+        first, last = self.first_frame, self.last_frame
+        receive_seconds = (last['received_timestamp_ns'] - first['received_timestamp_ns']) / 1e9
+        completion_seconds = self.last_done - self.first_done
+        pairs = last['received_pair_index'] - first['received_pair_index']
+        return dict(capture_config_hz=first['camera_info'].get('fps'),
+                    publish_config_hz=first['camera_info'].get('publish_fps'),
+                    receiver_hz=pairs / receive_seconds if receive_seconds > 0 else None,
+                    cloud_hz=(self.count - 1) / completion_seconds if completion_seconds > 0 else None,
+                    mean_sam_inference_ms=self.sam_ms / self.count,
+                    skipped_pairs=max(0, pairs + 1 - self.count))
 
 
 def print_rates(summary, *, final=False):
@@ -48,7 +65,7 @@ def main(source, on_cloud=None, stop_event=None):
     name = args.sequence_name or datetime.now().strftime('%Y-%m-%d-%H%M%S')
     dataset = args.dataset_root.expanduser().resolve() / name
     output = args.output_root.expanduser().resolve() / name
-    if dataset.exists() or output.exists():
+    if args.record and (dataset.exists() or output.exists()):
         raise FileExistsError(f'Sequence already exists: {name}')
     checkpoint = args.checkpoint or args.sam3_project / 'checkpoints' / 'sam3.pt'
     segmenter = Sam3CableSegmenter(args.sam3_project, checkpoint, prompt=args.prompt,
@@ -63,54 +80,82 @@ def main(source, on_cloud=None, stop_event=None):
     previous_term = signal.signal(signal.SIGTERM, stop)
     version = 0
     frames, results = [], []
+    stats = RunStats()
     created = False
     next_rate_log = time.monotonic() + 5.
+    previous_publish = None
     try:
-        dataset.mkdir(parents=True)
-        output.mkdir(parents=True)
-        created = True
-        print(f'Dataset: {dataset}\nPoint clouds: {output}')
+        if args.record:
+            dataset.mkdir(parents=True)
+            output.mkdir(parents=True)
+            created = True
+            print(f'Recording ON\nDataset: {dataset}\nPoint clouds: {output}')
+        else:
+            print('Recording OFF: compute and publish only; no dataset/output files', flush=True)
         while not stop_event.is_set():
+            wait_started = time.monotonic()
             frame = source.get_after(version, stop_event, args.receive_timeout)
+            input_wait_ms = (time.monotonic() - wait_started) * 1000.
             if frame is None:
                 break
             version, (metadata, rgb, depth) = frame
             started = time.perf_counter()
             source_age_ms = (time.time_ns() - metadata['timestamp_ns']) / 1e6
             camera = metadata['camera_info']
-            if not frames:
-                atomic_json(dataset / 'camera_info.json', camera)
+            if not stats.count:
+                if args.record:
+                    atomic_json(dataset / 'camera_info.json', camera)
                 print(f"[config] capture={camera.get('fps', 'N/A')}Hz "
                       f"publish_limit={camera.get('publish_fps', 'N/A')}Hz; "
                       "actual rates logged every 5s", flush=True)
             mask, score = segmenter.segment(rgb)
             inference_ms = (time.perf_counter() - started) * 1000.
+            geometry_started = time.monotonic()
             points, colors = depth_mask_to_points(depth, mask, np.asarray(camera['camera_matrix']), rgb,
                 min_depth_mm=args.min_depth_mm, max_depth_mm=args.max_depth_mm)
             points, colors = voxel_downsample(points, colors, args.voxel_size_mm * .001)
-            index = len(frames)
+            geometry_ms = (time.monotonic() - geometry_started) * 1000.
+            index = stats.count
             stem = f'{index:08d}'
-            for filename, image in ((f'rgb_{stem}.png', rgb), (f'depth_{stem}.png', depth), (f'mask_{stem}.png', mask)):
-                if not cv2.imwrite(str(dataset / filename), image):
-                    raise OSError(f'Failed to save {filename}')
-            save_ply(output / f'cable_camera_{stem}.ply', points, colors)
+            if args.record:
+                for filename, image in ((f'rgb_{stem}.png', rgb), (f'depth_{stem}.png', depth), (f'mask_{stem}.png', mask)):
+                    if not cv2.imwrite(str(dataset / filename), image):
+                        raise OSError(f'Failed to save {filename}')
+                save_ply(output / f'cable_camera_{stem}.ply', points, colors)
+            publish_started = time.monotonic()
             if on_cloud is not None:
                 on_cloud(metadata, points, colors)
-            frames.append(dict(frame_index=index, timestamp_ns=metadata['timestamp_ns'],
+            publish_done = time.monotonic()
+            publish_ms = (publish_done - publish_started) * 1000.
+            publish_gap_ms = ((publish_done - previous_publish) * 1000.
+                              if previous_publish is not None else None)
+            previous_publish = publish_done
+            frame_record = dict(frame_index=index, timestamp_ns=metadata['timestamp_ns'],
                 received_timestamp_ns=metadata['received_timestamp_ns'],
                 received_pair_index=metadata['received_pair_index'], frame_id=metadata['frame_id'],
-                rgb=f'rgb_{stem}.png', depth=f'depth_{stem}.png', camera_info=camera))
-            results.append(dict(frame_index=index, timestamp_ns=metadata['timestamp_ns'],
+                rgb=f'rgb_{stem}.png', depth=f'depth_{stem}.png', camera_info=camera)
+            result_record = dict(frame_index=index, timestamp_ns=metadata['timestamp_ns'],
                 sam_score=score, sam_inference_ms=inference_ms, point_count=len(points), mask=f'mask_{stem}.png',
+                input_wait_ms=input_wait_ms, geometry_ms=geometry_ms, publish_ms=publish_ms,
+                publish_done_monotonic_s=publish_done, publish_gap_ms=publish_gap_ms,
                 source_age_at_inference_ms=source_age_ms,
                 completed_monotonic_s=time.monotonic(),
-                result_age_ms=(time.time_ns() - metadata['timestamp_ns']) / 1e6))
-            print(f'frame={index:08d} SAM={inference_ms:.1f}ms age={results[-1]["result_age_ms"]:.1f}ms points={len(points)}')
+                result_age_ms=(time.time_ns() - metadata['timestamp_ns']) / 1e6)
+            stats.add(frame_record, result_record)
+            if args.record:
+                frames.append(frame_record)
+                results.append(result_record)
+            gap = 'N/A' if publish_gap_ms is None else f'{publish_gap_ms:.1f}ms'
+            print(f'frame={index:08d} SAM={inference_ms:.1f}ms '
+                  f'age={result_record["result_age_ms"]:.1f}ms points={len(points)} '
+                  f'wait={input_wait_ms:.1f}ms geometry={geometry_ms:.1f}ms '
+                  f'publish={publish_ms:.1f}ms publish_gap={gap} '
+                  f'done_monotonic={publish_done:.6f}', flush=True)
             view_open = viewer.update(points, colors)
             if time.monotonic() >= next_rate_log:
-                print_rates(rate_summary(frames, results))
+                print_rates(stats.summary())
                 next_rate_log = time.monotonic() + 5.
-            if not view_open or (args.max_frames and len(frames) >= args.max_frames):
+            if not view_open or (args.max_frames and stats.count >= args.max_frames):
                 break
     except (OSError, EOFError) as exc:
         if not stop_event.is_set():
@@ -119,14 +164,14 @@ def main(source, on_cloud=None, stop_event=None):
         signal.signal(signal.SIGINT, previous_int)
         signal.signal(signal.SIGTERM, previous_term)
         viewer.close()
+        rates = stats.summary()
+        if rates:
+            print_rates(rates, final=True)
         if created:
-            rates = rate_summary(frames, results)
-            if rates:
-                print_rates(rates, final=True)
             atomic_json(dataset / 'frames.json', {'frames': frames, 'sam_results': results})
             atomic_json(dataset / 'processing_stats.json', dict(sequence_name=name,
                 captured_frames=len(frames), sam_frames=len(results), mode='remote_ros2_latest_frame',
                 rates=rates,
-                mean_sam_inference_ms=float(np.mean([r['sam_inference_ms'] for r in results])) if results else None,
-                mean_result_age_ms=float(np.mean([r['result_age_ms'] for r in results])) if results else None))
+                mean_sam_inference_ms=stats.sam_ms / stats.count if stats.count else None,
+                mean_result_age_ms=stats.age_ms / stats.count if stats.count else None))
 

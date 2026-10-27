@@ -14,6 +14,9 @@ services:
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
       HOME: /tmp
       MPLBACKEND: Agg
+      PYTHONFAULTHANDLER: "1"
+      FASTRTPS_DEFAULT_PROFILES_FILE: "/workspace/cmcor/pointcloud/config/fastdds/gpu_pc_mtu1400.xml"
+      FASTDDS_DEFAULT_PROFILES_FILE: "/workspace/cmcor/pointcloud/config/fastdds/gpu_pc_mtu1400.xml"
     volumes:
       - ../..:/workspace/cmcor
     command: ["ros2", "launch", "cable_pointcloud", "gpu_pc.launch.py"]

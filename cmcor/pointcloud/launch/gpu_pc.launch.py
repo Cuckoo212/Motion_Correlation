@@ -11,15 +11,20 @@ def generate_launch_description():
     root = LaunchConfiguration('project_root')
     inference = Node(package='cable_pointcloud', executable='sam3_pointcloud',
                      prefix=[os.environ.get('SAM3_PYTHON', '/opt/sam3-env/bin/python')],
-                     arguments=['--topic-prefix', LaunchConfiguration('topic_prefix'), '--no-view', '--receive-timeout', '60',
+                     arguments=['--record', LaunchConfiguration('record'),
+                                '--topic-prefix', LaunchConfiguration('topic_prefix'), '--no-view', '--receive-timeout', '60',
                                 '--sam3-project', PathJoinSubstitution([root, 'pointcloud', 'sam3_project']),
                                 '--dataset-root', PathJoinSubstitution([root, 'datasets', 'realtime_cable_pc']),
                                 '--output-root', PathJoinSubstitution([root, 'output', 'realtime_cable_pc'])],
                      output='screen')
-    publisher = Node(package='cable_pointcloud', executable='pointcloud_publisher', output='screen')
+    publisher = Node(package='cable_pointcloud', executable='pointcloud_publisher', output='screen',
+                     parameters=[{'output_reliability': LaunchConfiguration('cloud_reliability')}])
     return LaunchDescription([
         DeclareLaunchArgument('project_root', default_value='/workspace/cmcor'),
         DeclareLaunchArgument('topic_prefix', default_value='/cable_camera'),
+        DeclareLaunchArgument('record', default_value='false', choices=['true', 'false']),
+        DeclareLaunchArgument('cloud_reliability', default_value='reliable',
+                              choices=['reliable', 'best_effort']),
         publisher, inference,
         *[RegisterEventHandler(OnProcessExit(target_action=process,
              on_exit=[EmitEvent(event=Shutdown(reason='GPU pipeline node exited'))]))
