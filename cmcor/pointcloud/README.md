@@ -348,8 +348,10 @@ CMCor 节点订阅 `/cable_camera/color/image_raw`、
 旧名称 `cmcor_mask.png` 保留为 raw 副本。两种结果点云分别为
 `/cable_camera/cmcor_points_raw`（红色）和 `/cable_camera/cmcor_points_edited`（青色），
 原 `/cable_camera/cmcor_points` 仍是 raw 的兼容别名。它们使用同一目标帧、深度、
-相机光学坐标系和时间戳；单臂扰动 RViz 通过静态标定 TF 显示。状态见
-`/cable_interaction/cmcor_status`。
+相机光学坐标系和时间戳。三路点云使用可靠、Volatile QoS，不向新订阅者补发旧结果；
+订阅者应使用 Volatile durability。单臂任务只转发本次启动之后采集的掩码点云到
+`/single_arm/cmcor_points_raw` 和 `/single_arm/cmcor_points_edited`，避免上一次计算
+迟到后重新显示；RViz 通过静态标定 TF 显示。状态见 `/cable_interaction/cmcor_status`。
 容器只读挂载仓库内的 `movingcables` 光流代码。节点会尝试 MaskFlownet，无法加载时由 CMCor 现有逻辑回退到 Farneback（CPU）。结果为两方向
 掩码的并集。edited 通过目标帧的 SAM3 掩码作为前景限制重新计算 CMCor；原始 RGB
 仍用于光流估计。SAM3 在指定原始目标帧上补算并按时间戳、frame_id、尺寸匹配，

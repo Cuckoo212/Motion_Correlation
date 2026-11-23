@@ -50,7 +50,7 @@ class Recorder(Node):
         self.recording = False
         self.computing = False
         self.lock = threading.Lock()
-        cloud_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        cloud_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE)
         # Keep the old topic as a raw-result alias for existing clients.
         self.pub = self.create_publisher(PointCloud2, '/cable_camera/cmcor_points', cloud_qos)
         self.raw_pub = self.create_publisher(PointCloud2, '/cable_camera/cmcor_points_raw', cloud_qos)
