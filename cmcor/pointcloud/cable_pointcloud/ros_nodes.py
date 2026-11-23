@@ -1,10 +1,11 @@
 """ROS inference, PointCloud2 relay and Mini PC display entry points."""
 import sys
+import queue
 import threading
 import numpy as np
 import rclpy
 from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
-from sensor_msgs.msg import PointCloud2, PointField
+from sensor_msgs.msg import PointCloud2, PointField, Image
 
 
 def cloud_message(metadata, points, colors):
@@ -51,6 +52,33 @@ def inference_main():
     rclpy.init(args=sys.argv)
     node = rclpy.create_node('sam3_pointcloud')
     pub = node.create_publisher(PointCloud2, '/cable_pointcloud/internal', qos_profile_sensor_data)
+    mask_qos = QoSProfile(depth=5, reliability=ReliabilityPolicy.RELIABLE)
+    mask_pub = node.create_publisher(Image, '/cable_interaction/sam3_target_mask', mask_qos)
+    mask_requests = queue.Queue(maxsize=1)
+    def request_mask(message):
+        from .rgbd_transport import decode_image
+        try:
+            rgb = decode_image(message, 'bgr8')
+            request = (message.header, rgb)
+            try:
+                mask_requests.put_nowait(request)
+            except queue.Full:
+                try:
+                    mask_requests.get_nowait()
+                except queue.Empty:
+                    pass
+                mask_requests.put_nowait(request)
+        except (ValueError, TypeError, queue.Full) as exc:
+            node.get_logger().warning(f'Invalid SAM3 target request: {exc}')
+    request_subscription = node.create_subscription(Image, '/cable_interaction/sam3_target_request', request_mask, mask_qos)
+    def publish_requested_mask(header, mask):
+        message = Image()
+        message.header = header
+        message.height, message.width = mask.shape
+        message.encoding = 'mono8'
+        message.step = message.width
+        message.data = np.ascontiguousarray(mask, dtype=np.uint8).tobytes()
+        mask_pub.publish(message)
     stop_event = threading.Event()
     thread = None
     original = sys.argv
@@ -78,7 +106,7 @@ def inference_main():
         thread.start()
         node.get_logger().info('Direct RGB-D subscriptions active; SAM3 consumes latest paired frame in memory')
         main(source, on_cloud=lambda metadata, points, colors: pub.publish(cloud_message(metadata, points, colors)),
-             stop_event=stop_event)
+             stop_event=stop_event, mask_requests=mask_requests, on_requested_mask=publish_requested_mask)
     finally:
         sys.argv = original
         stop_event.set()

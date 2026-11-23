@@ -2,6 +2,7 @@
 """Compute and record clouds from the inference node's in-memory RGB-D input."""
 from __future__ import annotations
 import signal
+import queue
 import threading
 import time
 from datetime import datetime
@@ -58,7 +59,7 @@ def print_rates(summary, *, final=False):
           f"skipped={summary['skipped_pairs']} (run average)", flush=True)
 
 
-def main(source, on_cloud=None, stop_event=None):
+def main(source, on_cloud=None, stop_event=None, mask_requests=None, on_requested_mask=None):
     args = parse_args()
     if args.receive_timeout <= 0:
         raise ValueError('receive-timeout must be positive')
@@ -93,6 +94,19 @@ def main(source, on_cloud=None, stop_event=None):
         else:
             print('Recording OFF: compute and publish only; no dataset/output files', flush=True)
         while not stop_event.is_set():
+            # The model is owned by this thread. Handle requested target frames
+            # here so it is never invoked concurrently by the ROS executor.
+            if mask_requests is not None and on_requested_mask is not None:
+                try:
+                    header, requested_rgb = mask_requests.get_nowait()
+                except queue.Empty:
+                    pass
+                else:
+                    try:
+                        requested_mask, _ = segmenter.segment(requested_rgb)
+                        on_requested_mask(header, requested_mask)
+                    except Exception as exc:
+                        print(f'SAM3 target request failed: {exc}', flush=True)
             wait_started = time.monotonic()
             frame = source.get_after(version, stop_event, args.receive_timeout)
             input_wait_ms = (time.monotonic() - wait_started) * 1000.

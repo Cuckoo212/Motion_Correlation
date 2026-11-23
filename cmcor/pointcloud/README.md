@@ -343,11 +343,17 @@ CMCor 节点订阅 `/cable_camera/color/image_raw`、
 80% 或任一方向少于 8 帧时不发布结果。两种数据的时间戳均由 Mini PC 产生。
 
 扰动结束后，帧序列及 `actions_gripper.json`、`cmcor_mask.png` 写入容器的
-`/workspace/cmcor/output/cmcor_sequences/<序列名>/`。结果点云在
-`/cable_camera/cmcor_points`，坐标为相机光学坐标系，时间戳对应计算使用的目标帧。
-单臂扰动 RViz 通过静态标定 TF 显示该点云；状态见 `/cable_interaction/cmcor_status`。
+`/workspace/cmcor/output/cmcor_sequences/<序列名>/`。同一次序列保存
+`cmcor_mask_raw.png`、`sam3_foreground_mask.png`、`cmcor_mask_edited.png`；
+旧名称 `cmcor_mask.png` 保留为 raw 副本。两种结果点云分别为
+`/cable_camera/cmcor_points_raw`（红色）和 `/cable_camera/cmcor_points_edited`（青色），
+原 `/cable_camera/cmcor_points` 仍是 raw 的兼容别名。它们使用同一目标帧、深度、
+相机光学坐标系和时间戳；单臂扰动 RViz 通过静态标定 TF 显示。状态见
+`/cable_interaction/cmcor_status`。
 容器只读挂载仓库内的 `movingcables` 光流代码。节点会尝试 MaskFlownet，无法加载时由 CMCor 现有逻辑回退到 Farneback（CPU）。结果为两方向
-掩码的并集，应先检查分割与标定效果，不应直接用于自动抓取。
+掩码的并集。edited 通过目标帧的 SAM3 掩码作为前景限制重新计算 CMCor；原始 RGB
+仍用于光流估计。SAM3 在指定原始目标帧上补算并按时间戳、frame_id、尺寸匹配，
+请求超时或掩码为空时保留 raw，不发布 edited。请先检查分割与标定效果。
 
 机械臂外力守护使用 ROS 话题和 MoveIt stop，不是实时控制器的力限制；首次连接时必须
 在可控环境中验证停止行为。相机标定、时间戳、传输丢帧和掩码质量均需在两机实测。

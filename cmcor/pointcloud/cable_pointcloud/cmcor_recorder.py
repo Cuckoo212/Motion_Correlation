@@ -11,7 +11,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image, CameraInfo, PointCloud2
 from std_msgs.msg import String, Bool
 from std_srvs.srv import Trigger
 from .rgbd_transport import FramePairer, decode_image
@@ -33,6 +33,7 @@ class Recorder(Node):
         self.declare_parameter('mask_threshold', 0.86)
         self.declare_parameter('max_frames', 1500)
         self.declare_parameter('gpu', True)
+        self.declare_parameter('sam3_target_timeout', 30.0)
         self.declare_parameter('output_root', '/workspace/cmcor/output/cmcor_sequences')
         prefix = self.get_parameter('topic_prefix').value.rstrip('/')
         sensor = QoSProfile(depth=20, reliability=ReliabilityPolicy.BEST_EFFORT)
@@ -49,7 +50,17 @@ class Recorder(Node):
         self.recording = False
         self.computing = False
         self.lock = threading.Lock()
-        self.pub = self.create_publisher(__import__('sensor_msgs.msg', fromlist=['PointCloud2']).PointCloud2, '/cable_camera/cmcor_points', QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        cloud_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        # Keep the old topic as a raw-result alias for existing clients.
+        self.pub = self.create_publisher(PointCloud2, '/cable_camera/cmcor_points', cloud_qos)
+        self.raw_pub = self.create_publisher(PointCloud2, '/cable_camera/cmcor_points_raw', cloud_qos)
+        self.edited_pub = self.create_publisher(PointCloud2, '/cable_camera/cmcor_points_edited', cloud_qos)
+        mask_qos = QoSProfile(depth=5, reliability=ReliabilityPolicy.RELIABLE)
+        self.mask_request_pub = self.create_publisher(Image, '/cable_interaction/sam3_target_request', mask_qos)
+        self.mask_condition = threading.Condition()
+        self.pending_target = None
+        self.target_mask = None
+        self.create_subscription(Image, '/cable_interaction/sam3_target_mask', self.on_target_mask, mask_qos)
         self.status = self.create_publisher(String, '/cable_interaction/cmcor_status', 10)
         self.heartbeat = self.create_publisher(Bool, '/cable_interaction/recording_active', 10)
         self.create_subscription(CameraInfo, prefix+'/color/camera_info', self.on_info, info)
@@ -95,6 +106,67 @@ class Recorder(Node):
             self.get_logger().warning('Invalid camera calibration')
             return
         self.camera = (msg.header.frame_id, msg.width, msg.height, matrix)
+
+    def on_target_mask(self, msg):
+        try:
+            stamp = ns(msg.header.stamp)
+            if msg.encoding != 'mono8' or msg.width <= 0 or msg.height <= 0 or msg.step < msg.width or len(msg.data) != msg.height * msg.step:
+                raise ValueError('invalid mono8 mask')
+            image = np.frombuffer(bytes(msg.data), np.uint8).reshape(msg.height, msg.step)[:, :msg.width].copy()
+            with self.mask_condition:
+                if self.pending_target == (stamp, msg.header.frame_id, msg.height, msg.width):
+                    self.target_mask = image > 0
+                    self.mask_condition.notify_all()
+        except (TypeError, ValueError) as exc:
+            self.get_logger().warning(f'Invalid SAM3 target mask: {exc}')
+
+    def request_target_mask(self, target):
+        stamp, frame_id, rgb, _, _ = target
+        request = Image()
+        request.header.stamp.sec, request.header.stamp.nanosec = divmod(stamp, 10**9)
+        request.header.frame_id = frame_id
+        request.height, request.width = rgb.shape[:2]
+        request.encoding = 'bgr8'
+        request.step = request.width * 3
+        request.data = np.ascontiguousarray(rgb).tobytes()
+        timeout = float(self.get_parameter('sam3_target_timeout').value)
+        if not np.isfinite(timeout) or timeout <= 0:
+            raise ValueError('Invalid SAM3 target timeout')
+        deadline = time.monotonic() + timeout
+        with self.mask_condition:
+            self.pending_target = (stamp, frame_id, request.height, request.width)
+            self.target_mask = None
+            try:
+                while self.target_mask is None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError('SAM3 target mask timed out')
+                    self.mask_request_pub.publish(request)
+                    self.mask_condition.wait(min(1.0, remaining))
+                result = self.target_mask
+                if not result.any():
+                    raise ValueError('SAM3 target mask is empty')
+                return result
+            finally:
+                self.pending_target = None
+                self.target_mask = None
+
+    def result_mask(self, mp):
+        if mp.corr_imgs is None or not mp.action2index:
+            raise ValueError('CMCor returned no correlation images')
+        threshold = float(self.get_parameter('mask_threshold').value)
+        return np.logical_or.reduce([
+            np.nan_to_num(mp.corr_imgs[i], nan=0., posinf=0., neginf=0.) > threshold
+            for i in mp.action2index.values()]).astype(np.uint8)
+
+    def publish_result(self, target, mask, publishers, color):
+        stamp, frame_id, _, depth, matrix = target
+        points, _ = depth_mask_to_points(depth, mask, matrix)
+        colors = np.tile(np.array(color, dtype=np.uint8), (len(points), 1))
+        message = cloud_message({'timestamp_ns': stamp, 'frame_id': frame_id}, points, colors)
+        for publisher in publishers:
+            publisher.publish(message)
+        return len(points)
 
     def on_state(self, msg):
         try:
@@ -158,7 +230,9 @@ class Recorder(Node):
                 self.frames = []
                 self.recording = True
                 # Clear any previous latched result before starting a new sequence.
-                self.pub.publish(cloud_message({'timestamp_ns': self.last_pair[1], 'frame_id': self.camera[0]}, np.empty((0, 3), np.float32), None))
+                empty = cloud_message({'timestamp_ns': self.last_pair[1], 'frame_id': self.camera[0]}, np.empty((0, 3), np.float32), None)
+                for publisher in (self.pub, self.raw_pub, self.edited_pub):
+                    publisher.publish(empty)
                 res.success = True
                 res.message = 'recording ready'
         return res
@@ -230,20 +304,33 @@ class Recorder(Node):
             target, _ = matched[-1]
             matrix = target[4]
             depth_m = float(np.median([s[2][2] for _, s in matched if s[1] >= 0]))
+            # Compute and publish raw first so a SAM3 timeout does not erase it.
             mp.compute_correlation_images(depth_m, float(matrix[0, 0]))
-            if mp.corr_imgs is None or not mp.action2index:
-                raise ValueError('CMCor returned no correlation images')
-            threshold = float(self.get_parameter('mask_threshold').value)
-            masks = [np.nan_to_num(mp.corr_imgs[i], nan=0., posinf=0., neginf=0.) > threshold for i in mp.action2index.values()]
-            mask = np.logical_or.reduce(masks).astype(np.uint8)
-            if not cv2.imwrite(str(sequence / 'cmcor_mask.png'), mask * 255):
-                raise IOError('Failed to save CMCor mask')
-            _, fid, rgb, depth, _ = target
-            points, colors = depth_mask_to_points(depth, mask, matrix, rgb)
-            if not len(points):
-                raise ValueError('CMCor mask has no valid depth points')
-            self.pub.publish(cloud_message({'timestamp_ns': target[0], 'frame_id': fid}, points, colors))
-            self.report(f'completed: frames={len(frames)} matched={len(matched)} action_frames={counts} points={len(points)} sequence={sequence}')
+            raw_mask = self.result_mask(mp)
+            if not cv2.imwrite(str(sequence / 'cmcor_mask_raw.png'), raw_mask * 255):
+                raise IOError('Failed to save raw CMCor mask')
+            # Preserve the former on-disk name and topic for existing consumers.
+            if not cv2.imwrite(str(sequence / 'cmcor_mask.png'), raw_mask * 255):
+                raise IOError('Failed to save legacy CMCor mask')
+            raw_points = self.publish_result(target, raw_mask, (self.raw_pub, self.pub), (255, 40, 40))
+            self.report(f'raw completed: frames={len(frames)} matched={len(matched)} action_frames={counts} points={raw_points} sequence={sequence}')
+            try:
+                foreground = self.request_target_mask(target)
+                if not cv2.imwrite(str(sequence / 'sam3_foreground_mask.png'), foreground.astype(np.uint8) * 255):
+                    raise IOError('Failed to save SAM3 mask')
+                # Recompute correlation with the existing foreground analysis path.
+                mp.image_buffer[-1]['foreground_mask'] = foreground
+                mp.compute_correlation_images(depth_m, float(matrix[0, 0]))
+                edited_mask = self.result_mask(mp)
+                # Guarantee the saved/published result cannot extend outside SAM3.
+                edited_mask &= foreground.astype(np.uint8)
+                if not cv2.imwrite(str(sequence / 'cmcor_mask_edited.png'), edited_mask * 255):
+                    raise IOError('Failed to save foreground CMCor mask')
+                edited_points = self.publish_result(target, edited_mask, (self.edited_pub,), (0, 220, 255))
+                self.report(f'edited completed: points={edited_points} sequence={sequence}')
+            except Exception as exc:
+                self.get_logger().error(f'Foreground CMCor failed; raw result retained: {exc}')
+                self.report(f'edited failed; raw retained: {exc}')
         except Exception as e:
             self.get_logger().error(f'CMCor failed: {e}')
             self.report(f'failed: {e}')
