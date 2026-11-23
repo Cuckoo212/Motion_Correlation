@@ -3,7 +3,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler, EmitEvent
 from launch.events import Shutdown
 from launch.event_handlers import OnProcessExit
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, EnvironmentVariable
 from launch_ros.actions import Node
 
 
@@ -17,6 +17,11 @@ def generate_launch_description():
                                 '--dataset-root', PathJoinSubstitution([root, 'datasets', 'realtime_cable_pc']),
                                 '--output-root', PathJoinSubstitution([root, 'output', 'realtime_cable_pc'])],
                      output='screen')
+    cmcor = Node(package='cable_pointcloud', executable='cmcor_recorder',
+                 prefix=[os.environ.get('CMCOR_PYTHON', os.environ.get('SAM3_PYTHON', '/opt/sam3-env/bin/python'))],
+                 additional_env={'PYTHONPATH': [root, ':', EnvironmentVariable('PYTHONPATH', default_value='')]},
+                 parameters=[{'topic_prefix': LaunchConfiguration('topic_prefix'),
+                              'output_root': PathJoinSubstitution([root, 'output', 'cmcor_sequences'])}], output='screen')
     publisher = Node(package='cable_pointcloud', executable='pointcloud_publisher', output='screen',
                      parameters=[{'output_reliability': LaunchConfiguration('cloud_reliability')}])
     return LaunchDescription([
@@ -25,7 +30,7 @@ def generate_launch_description():
         DeclareLaunchArgument('record', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('cloud_reliability', default_value='reliable',
                               choices=['reliable', 'best_effort']),
-        publisher, inference,
+        publisher, inference, cmcor,
         *[RegisterEventHandler(OnProcessExit(target_action=process,
              on_exit=[EmitEvent(event=Shutdown(reason='GPU pipeline node exited'))]))
           for process in (inference, publisher)]])

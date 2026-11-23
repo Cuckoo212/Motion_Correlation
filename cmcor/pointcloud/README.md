@@ -110,7 +110,7 @@ GPU 镜像也使用 `cmcor` 工作空间，位于 `/opt/cmcor`，入口加载
 
 ### Mini PC：本地桌面终端
 
-关闭占用相机的程序。一次启动采集发布和点云显示：
+关闭占用相机的程序。默认只启动采集与发布，不打开点云窗口；机器人任务启动自己的 RViz：
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -157,7 +157,7 @@ bash -c 'trap "exit 0" INT TERM; while true; do ros2 launch cable_pointcloud gpu
 ```
 
 
-一次启动 SAM3 直接订阅计算和点云发布；GPU 无需桌面窗口，在 Mini PC 查看点云。
+一次启动 SAM3 直接订阅计算、点云发布和 CMCor 采集节点；GPU 无需桌面窗口，在 Mini PC 的机器人 RViz 查看点云。
 输入等待及断流超时默认 60 秒，建议先启动 Mini PC。
 
 也可以在宿主机直接启动容器中的 launch，无需先进入 bash：
@@ -184,7 +184,7 @@ color/camera_info、metadata。内部点云为 `/cable_pointcloud/internal`，�
 点云接收使用 BEST_EFFORT QoS，显示最新结果。
 
 GPU 终端每约 5 秒打印配置采集/发布频率、实际接收/点云频率、SAM3 平均耗时及跳过帧数。
-默认运行不会创建录制目录或写入图像、mask、PLY、JSON；终端日志和点云发布不受影响。
+SAM3 默认运行不会创建录制目录或写入图像、mask、PLY、JSON；终端日志和点云发布不受影响。CMCor 在扰动任务完成后另行保存其同步序列，见下文。
 默认模式使用常量大小的累计统计，不保留随帧数增长的录制记录列表。
 
 需要录制时，在 GPU 容器内显式执行：
@@ -329,3 +329,25 @@ RELIABLE 发布者，但不会因此自动得到可靠传输保障。
 当前容器与镜像已重新构建；现有进程需要重启才能采用新 QoS。
 临时 `/cable_camera/cable_points_reliable_test` 仅用于诊断，不能作为永久接口。
 用户已确认该测试话题连续两次收到 8235 / 8261 点的完整点云；持续帧率尚需远端验证。
+
+## CMCor 单臂扰动
+
+重新构建 GPU Docker 镜像后使用 `gpu_pc.launch.py`；其中同时启动 SAM3 和
+`cmcor_recorder`。Mini PC 先以本节命令启动 RGB-D 采集，再启动机器人工作空间中的
+`single_perturbation.launch.py`。不要同时启动占用同一机械臂的另一个机器人 launch。
+
+CMCor 节点订阅 `/cable_camera/color/image_raw`、
+`/cable_camera/aligned_depth/image_raw`、`/cable_camera/color/camera_info`、
+`/cable_camera/metadata` 和 `/cable_interaction/state`。图像和深度使用完全相同的
+采集时间戳配对；机器人状态与每帧按时间最近匹配，默认允许 100 ms，匹配率不足
+80% 或任一方向少于 8 帧时不发布结果。两种数据的时间戳均由 Mini PC 产生。
+
+扰动结束后，帧序列及 `actions_gripper.json`、`cmcor_mask.png` 写入容器的
+`/workspace/cmcor/output/cmcor_sequences/<序列名>/`。结果点云在
+`/cable_camera/cmcor_points`，坐标为相机光学坐标系，时间戳对应计算使用的目标帧。
+单臂扰动 RViz 通过静态标定 TF 显示该点云；状态见 `/cable_interaction/cmcor_status`。
+容器只读挂载仓库内的 `movingcables` 光流代码。节点会尝试 MaskFlownet，无法加载时由 CMCor 现有逻辑回退到 Farneback（CPU）。结果为两方向
+掩码的并集，应先检查分割与标定效果，不应直接用于自动抓取。
+
+机械臂外力守护使用 ROS 话题和 MoveIt stop，不是实时控制器的力限制；首次连接时必须
+在可控环境中验证停止行为。相机标定、时间戳、传输丢帧和掩码质量均需在两机实测。

@@ -19,5 +19,6 @@ services:
       FASTDDS_DEFAULT_PROFILES_FILE: "/workspace/cmcor/pointcloud/config/fastdds/gpu_pc_mtu1400.xml"
     volumes:
       - ../..:/workspace/cmcor
+      - ../../../movingcables:/workspace/movingcables:ro
     command: ["ros2", "launch", "cable_pointcloud", "gpu_pc.launch.py"]
     stop_grace_period: 30s

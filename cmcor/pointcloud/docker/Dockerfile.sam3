@@ -17,7 +17,7 @@ COPY sam3_project /workspace/cmcor/pointcloud/sam3_project
 COPY requirements-realtime.txt /workspace/cmcor/pointcloud/requirements-realtime.txt
 WORKDIR /workspace/cmcor/pointcloud
 RUN /opt/sam3-env/bin/python -m pip install -r requirements-realtime.txt \
-    && /opt/sam3-env/bin/python -c 'import sam3, torch, cv2, pyrealsense2; print(torch.__version__)'
+    && /opt/sam3-env/bin/python -c 'import sam3, torch, cv2, pyrealsense2, sklearn; print(torch.__version__)'
 
 ENV PATH="/opt/sam3-env/bin:${PATH}"
 COPY . /opt/cmcor/pointcloud

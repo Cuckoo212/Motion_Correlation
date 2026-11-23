@@ -1,11 +1,13 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
     return LaunchDescription([
+        DeclareLaunchArgument('viewer', default_value='false'),
         DeclareLaunchArgument('publish_fps', default_value='10'),
         DeclareLaunchArgument('crop_left', default_value='100'),
         DeclareLaunchArgument('crop_top', default_value='140'),
@@ -16,4 +18,5 @@ def generate_launch_description():
                         '--publish-fps', LaunchConfiguration('publish_fps'),
                         '--crop', LaunchConfiguration('crop_left'), LaunchConfiguration('crop_top'),
                         LaunchConfiguration('crop_width'), LaunchConfiguration('crop_height')], output='screen'),
-        Node(package='cable_pointcloud', executable='pointcloud_viewer', output='screen')])
+        Node(package='cable_pointcloud', executable='pointcloud_viewer', output='screen',
+             condition=IfCondition(LaunchConfiguration('viewer')))])

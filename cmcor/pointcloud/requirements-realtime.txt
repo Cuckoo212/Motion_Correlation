@@ -11,3 +11,6 @@ opencv-python
 matplotlib
 pillow
 pyrealsense2
+
+# CMCor motion correlation uses PCA.
+scikit-learn
