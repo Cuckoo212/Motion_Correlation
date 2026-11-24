@@ -184,6 +184,9 @@ class Recorder(Node):
         except (ValueError, TypeError, KeyError) as e:
             self.get_logger().warning(f'Invalid interaction state: {e}')
 
+    def on_paired_frame(self, frame):
+        """Hook for continuous session recorders; single mode has no session."""
+
     def on_image(self, kind, msg):
         try:
             t = ns(msg.header.stamp)
@@ -202,6 +205,7 @@ class Recorder(Node):
                         self.report('aborted: frame limit exceeded')
                     else:
                         self.frames.append((t, fid, rgb, depth, self.camera[3].copy()))
+            self.on_paired_frame((t, fid, rgb, depth, self.camera[3].copy()))
         except (ValueError, TypeError) as e:
             self.get_logger().warning(f'Invalid RGB-D: {e}')
 
